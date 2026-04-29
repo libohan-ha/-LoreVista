@@ -4,9 +4,10 @@ import { chatStream, type Chapter } from '../api';
 
 interface Props {
   chapter: Chapter | null;
+  onMessageSent?: () => void;
 }
 
-export default function ChatPanel({ chapter }: Props) {
+export default function ChatPanel({ chapter, onMessageSent }: Props) {
   const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -60,6 +61,7 @@ export default function ChatPanel({ chapter }: Props) {
         setMessages((prev) => [...prev, { role: 'assistant', content: fullContent }]);
         setStreamContent('');
         setStreaming(false);
+        onMessageSent?.();
       },
       (err) => {
         setMessages((prev) => [...prev, { role: 'assistant', content: `错误: ${err}` }]);

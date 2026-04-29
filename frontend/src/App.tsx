@@ -134,7 +134,7 @@ function App() {
       <main className="flex-1 flex min-h-0">
         {/* Left: Chat */}
         <div className="w-1/2 border-r border-gray-800">
-          <ChatPanel chapter={currentChapter} />
+          <ChatPanel chapter={currentChapter} onMessageSent={refreshCurrentChapter} />
         </div>
 
         {/* Right: Manga */}

@@ -37,3 +37,5 @@ Thumbs.db
 test_image_ref.py
 test_novel_length.py
 generate_image.py
+test_manga_page8.png
+test_scenes_output.txt

@@ -17,7 +17,7 @@ load_dotenv()
 IMAGE_API_BASE_URL = os.getenv("IMAGE_API_BASE_URL", "https://api.duojie.games/v1").rstrip("/")
 IMAGE_API_KEY = os.getenv("IMAGE_API_KEY", "")
 IMAGE_MODEL = "gpt-image-2"
-IMAGE_SIZE = "1024x1024"
+IMAGE_SIZE = "1024x1536"
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "manga_outputs"
 
 
@@ -32,18 +32,28 @@ async def generate_manga_image(prompt: str, chapter_id: int, image_number: int, 
     if character_profiles:
         char_block = f"【角色外貌设定（每张图必须严格遵守）】\n{character_profiles}\n\n"
 
+    MANGA_STYLE = (
+        "日式黑白漫画页，竖向多格分镜布局，每页包含3-4个分镜格，"
+        "格子高度不等（动作场景用宽格，对话特写用窄格），"
+        "每个分镜格之间有清晰的黑色边框分隔，"
+        "包含圆形/椭圆形白色对话气泡和中文台词，"
+        "包含漫画音效字（如“唷”“铿！”“嗡—”），"
+        "黑白高对比度，戏剧性光影，精细的线条和网点，"
+        "人物绘制精美，表情生动，动作有力度感"
+    )
+
     if all_scenes:
-        script_context = "\n".join(f"第{i+1}格：{s}" for i, s in enumerate(all_scenes))
+        script_context = "\n".join(f"第{i+1}页：{s}" for i, s in enumerate(all_scenes))
         full_prompt = (
             f"{char_block}"
-            f"你正在为一部日式轻小说绘制第{image_number}幅插画（共10幅）。\n"
-            f"以下是完整的10幅插画脚本，请保持人物外貌、服装、风格的一致性：\n\n"
+            f"你正在绘制一部日式漫画的第{image_number}页（共10页）。\n"
+            f"以下是完整的10页的分镜脚本，请保持人物外貌、服装、风格的一致性：\n\n"
             f"{script_context}\n\n"
-            f"现在请绘制第{image_number}幅的画面：\n"
-            f"精美日式动漫插画风格，柔和淡雅色调，细腻的光影效果，精致的服装细节，轻小说彩色插图，单幅画面：{prompt}"
+            f"现在请绘制第{image_number}页：\n"
+            f"{MANGA_STYLE}\n{prompt}"
         )
     else:
-        full_prompt = f"{char_block}精美日式动漫插画风格，柔和淡雅色调，细腻的光影效果，精致的服装细节，轻小说彩色插图，单幅画面：{prompt}"
+        full_prompt = f"{char_block}{MANGA_STYLE}\n{prompt}"
 
     payload = {
         "model": IMAGE_MODEL,
