@@ -68,6 +68,7 @@ IMAGE_API_KEY=你的图片生成API密钥
 ## 效果
 <img width="1437" height="1325" alt="image" src="https://github.com/user-attachments/assets/292cd965-1bbe-4ac2-be2c-e577d1c1b545" />
 <img width="2477" height="1474" alt="8225c4cd8b1ac53ee97418cc6646db8c" src="https://github.com/user-attachments/assets/2e394e4c-f0c0-4af6-ae8d-63713d111cde" />
-<img width="2477" height="1483" alt="image" src="https://github.com/user-attachments/assets/a70413de-48ac-4478-b5f3-286a4853e9b7" />
+<img width="2478" height="1479" alt="image" src="https://github.com/user-attachments/assets/5e4a6aa5-9f7f-49a2-8e47-65a5c2ad9dec" />
+
 
 MIT
