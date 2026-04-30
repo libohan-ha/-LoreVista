@@ -34,9 +34,12 @@ Thumbs.db
 .spec-workflow/
 
 # ─── Misc test files ───
-test_image_ref.py
-test_novel_length.py
+test_*.py
+test_*.png
+test_*.txt
 generate_image.py
-test_manga_page8.png
-test_manga_page1_4panel.png
-test_scenes_output.txt
+微信图片_*
+
+# ─── MD files (except README) ───
+*.md
+!README.md

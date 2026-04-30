@@ -237,6 +237,48 @@ export async function saveCharacters(chapterId: number, characters: string): Pro
   if (!res.ok) throw new Error(await res.text());
 }
 
+// ─── Reference Image (垫图) ─────────────────────────────────
+
+export async function getRefImage(chapterId: number): Promise<{ has_ref: boolean; size_kb?: number }> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/ref-image`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function uploadRefImage(chapterId: number, base64: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/ref-image`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: base64 }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function deleteRefImage(chapterId: number): Promise<void> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/ref-image`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+// ─── Color Mode ─────────────────────────────────────────────
+
+export type ColorMode = 'bw' | 'color';
+
+export async function getColorMode(chapterId: number): Promise<ColorMode> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/color-mode`);
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data.color_mode || 'bw';
+}
+
+export async function setColorMode(chapterId: number, mode: ColorMode): Promise<void> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/color-mode`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ color_mode: mode }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
 export async function regenerateImage(
   chapterId: number,
   imageNumber: number,

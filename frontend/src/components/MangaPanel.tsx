@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronUp, ChevronDown, Download, ImageIcon, Loader2, Sparkles, Pencil, RefreshCw, Check, X } from 'lucide-react';
+import { ChevronUp, ChevronDown, Download, ImageIcon, Loader2, Sparkles, Pencil, RefreshCw, Check, X, ImagePlus, Trash2 } from 'lucide-react';
 import {
   generateMangaStream,
   generateScenes,
@@ -8,9 +8,15 @@ import {
   regenerateImage,
   getCharacters,
   saveCharacters,
+  getRefImage,
+  uploadRefImage,
+  deleteRefImage,
+  getColorMode,
+  setColorMode,
   mangaImageUrl,
   type Chapter,
   type MangaProgress,
+  type ColorMode,
 } from '../api';
 import { genStore } from '../genStore';
 
@@ -26,28 +32,6 @@ interface ImageItem {
 }
 
 type Phase = 'idle' | 'generating-scenes' | 'editing-scenes' | 'generating-images';
-
-const DEFAULT_CHARACTERS = `角色名：塞蕾娜（Serena）
-性别：女
-年龄段：青年
-发色与发型：银灰色长发，发尾带冷白光泽，长度过腰；前额有细碎刘海，两侧留有贴脸发束；战斗时通常束成高马尾或半高马尾，日常多为自然披发或低束发
-瞳色：冰灰蓝色
-面部特征：瓜子脸偏冷感轮廓，下颌线清晰；鼻梁挺直，嘴唇偏薄；表情常年克制平静，战斗时眼神锐利压迫，面对公主时会出现极淡的温柔和隐约红晕
-体型：高挑纤细，肩背挺直，腰线明显，四肢修长有力量感，约170cm左右
-标志性服装：固定为黑白主色的高阶战斗女仆装；上身为黑色收腰束身长袖女仆上衣，胸前白色荷叶边内衬与黑色丝带领结；下身为多层不规则裙摆的黑白短前长后裙，方便行动；外披深黑偏蓝的长摆披风或后摆外层；腿部为黑色过膝袜或贴身长袜，搭配银黑色高跟战斗短靴；战斗时加装银色护臂、护腿与轻型腰甲
-标志性配饰/道具：白色女仆头饰；黑色缎带发饰；腰间佩一把银黑色长剑；必要时手背、脚踝与腰侧会显现银蓝色术式纹路；影庭展开时脚下会浮现黑色影纹法阵
-气质关键词：冷静、克制、锋利、忠诚、禁欲
-
-角色名：艾莉西娅（Alicia）
-性别：女
-年龄段：少女
-发色与发型：金色长发，带柔和蜂蜜金与浅日光色层次，长度过腰；发量丰厚，发尾微卷；前额为轻薄空气刘海，两侧有柔软脸侧发；正式场合多为半披发配编发与王族发饰，日常则多为自然披发
-瞳色：浅金琥珀色
-面部特征：小巧鹅蛋脸，五官精致柔和，眼睛大而明亮，睫毛纤长；嘴唇饱满柔软；平时神情温柔高贵，撒娇时眼神湿润黏人，认真时会显出王女式的理性与坚定
-体型：高挑偏纤细，曲线柔和，肩颈线条优美，体态轻盈端庄，约165cm左右
-标志性服装：固定为白金与淡紫主色的王女礼裙；上身为收腰露肩或半露肩宫廷式礼服胸衣，点缀金线与花纹刺绣；下身为多层轻纱长裙，裙摆宽大飘逸；袖口常为垂坠式薄纱长袖或花边袖；搭配白色或浅金高跟鞋；正式出行可披浅紫白金短披肩
-标志性配饰/道具：王女冠饰或小型王族发冠；紫晶与白蔷薇元素发饰；耳坠与颈饰常为金色与淡紫宝石；手背或胸前在动用王权共鸣时会浮现浅金色魔法纹路；偶尔携带象征王女身份的细身手杖或礼仪短扇
-气质关键词：高贵、温柔、明亮、黏人、王者感`;
 
 export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
@@ -66,6 +50,12 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const [charDraft, setCharDraft] = useState('');
   const [charSaving, setCharSaving] = useState(false);
   const [charExpanded, setCharExpanded] = useState(false);
+  const [hasRefImage, setHasRefImage] = useState(false);
+  const [refUploading, setRefUploading] = useState(false);
+  const [colorMode, setColorModeState] = useState<ColorMode>('bw');
+  const [showColorMenu, setShowColorMenu] = useState(false);
+  const colorMenuRef = useRef<HTMLDivElement>(null);
+  const refFileRef = useRef<HTMLInputElement>(null);
   const lightboxRef = useRef<HTMLDivElement>(null);
 
   // Subscribe to module-level generation store so we re-render when any chapter's gen state changes
@@ -90,8 +80,13 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     setCharText('');
     setCharEditing(false);
     setCharExpanded(false);
+    setHasRefImage(false);
+    setColorModeState('bw');
+    setShowColorMenu(false);
     // Load existing scenes and characters if available
     if (chapter) {
+      getRefImage(chapter.id).then((r) => setHasRefImage(r.has_ref)).catch(() => {});
+      getColorMode(chapter.id).then((m) => setColorModeState(m)).catch(() => {});
       getScenes(chapter.id).then((s) => {
         if (s.length === 10) {
           setScenes(s);
@@ -99,13 +94,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
         }
       }).catch(() => {});
       getCharacters(chapter.id).then((c) => {
-        if (c) {
-          setCharText(c);
-        } else {
-          // Auto-fill default character profiles for new chapters
-          setCharText(DEFAULT_CHARACTERS);
-          saveCharacters(chapter.id, DEFAULT_CHARACTERS).catch(() => {});
-        }
+        setCharText(c || '');
       }).catch(() => {});
     }
   }, [chapter?.id]);
@@ -201,7 +190,28 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     }
   };
 
+  // ── Close color menu on outside click ──
+  useEffect(() => {
+    if (!showColorMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (colorMenuRef.current && !colorMenuRef.current.contains(e.target as Node)) {
+        setShowColorMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showColorMenu]);
+
   // ── Image generation ──
+  const handleGenerateWithMode = async (mode: ColorMode) => {
+    if (!chapter) return;
+    setShowColorMenu(false);
+    // Save color mode
+    await setColorMode(chapter.id, mode);
+    setColorModeState(mode);
+    handleGenerateImages();
+  };
+
   const handleGenerateImages = async () => {
     if (!chapter) return;
     // Already generating for this chapter — ignore
@@ -299,6 +309,60 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
           第 {chapter?.chapter_number ?? '–'} 话 · 漫画
         </h2>
         <div className="flex items-center gap-2">
+          {/* 垫图 (Reference Image) */}
+          <div className="flex items-center gap-1">
+            <input
+              ref={refFileRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file || !chapter) return;
+                setRefUploading(true);
+                try {
+                  const reader = new FileReader();
+                  const b64 = await new Promise<string>((resolve) => {
+                    reader.onload = () => resolve((reader.result as string).split(',')[1]);
+                    reader.readAsDataURL(file);
+                  });
+                  await uploadRefImage(chapter.id, b64);
+                  setHasRefImage(true);
+                } catch (err: any) {
+                  setErrorMsg(`上传垫图失败: ${err.message}`);
+                } finally {
+                  setRefUploading(false);
+                  e.target.value = '';
+                }
+              }}
+            />
+            <button
+              onClick={() => refFileRef.current?.click()}
+              disabled={!chapter || refUploading}
+              className={`flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors
+                ${hasRefImage
+                  ? 'bg-emerald-900/50 hover:bg-emerald-800 text-emerald-300 border border-emerald-700'
+                  : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+                } disabled:opacity-40`}
+              title={hasRefImage ? '已设置垫图（点击更换）' : '上传垫图参考'}
+            >
+              {refUploading ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
+              {hasRefImage ? '已垫图' : '垫图'}
+            </button>
+            {hasRefImage && (
+              <button
+                onClick={async () => {
+                  if (!chapter) return;
+                  await deleteRefImage(chapter.id);
+                  setHasRefImage(false);
+                }}
+                className="p-1.5 text-gray-600 hover:text-red-400 rounded transition-colors"
+                title="移除垫图"
+              >
+                <Trash2 size={12} />
+              </button>
+            )}
+          </div>
           {hasImages && (
             <button
               onClick={() => {
@@ -329,14 +393,39 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             </button>
           )}
           {!generating && phase === 'editing-scenes' && scenes.length === 10 && (
-            <button
-              onClick={handleGenerateImages}
-              className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-md
-                         bg-amber-500 hover:bg-amber-400 text-gray-950 transition-colors"
-            >
-              <Sparkles size={13} />
-              {existingImages.length > 0 && existingImages.length < 10 ? '继续生成漫画' : '生成漫画'}
-            </button>
+            <div className="relative" ref={colorMenuRef}>
+              <button
+                onClick={() => setShowColorMenu((v) => !v)}
+                className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-md
+                           bg-amber-500 hover:bg-amber-400 text-gray-950 transition-colors"
+              >
+                <Sparkles size={13} />
+                {existingImages.length > 0 && existingImages.length < 10 ? '继续生成漫画' : '生成漫画'}
+                <ChevronDown size={12} className={`transition-transform ${showColorMenu ? 'rotate-180' : ''}`} />
+              </button>
+              {showColorMenu && (
+                <div className="absolute right-0 top-full mt-1 w-44 rounded-lg border border-gray-700 bg-gray-900 shadow-xl z-50 overflow-hidden">
+                  <button
+                    onClick={() => handleGenerateWithMode('bw')}
+                    className={`w-full flex items-center gap-2 px-3 py-2.5 text-xs transition-colors hover:bg-gray-800
+                      ${colorMode === 'bw' ? 'text-amber-400 font-semibold' : 'text-gray-300'}`}
+                  >
+                    <span className="w-4 h-4 rounded border-2 border-gray-500 bg-gradient-to-br from-white to-gray-900 shrink-0" />
+                    黑白漫画
+                    {colorMode === 'bw' && <Check size={12} className="ml-auto text-amber-400" />}
+                  </button>
+                  <button
+                    onClick={() => handleGenerateWithMode('color')}
+                    className={`w-full flex items-center gap-2 px-3 py-2.5 text-xs transition-colors hover:bg-gray-800
+                      ${colorMode === 'color' ? 'text-amber-400 font-semibold' : 'text-gray-300'}`}
+                  >
+                    <span className="w-4 h-4 rounded border-2 border-gray-500 bg-gradient-to-br from-pink-400 via-blue-400 to-green-400 shrink-0" />
+                    彩色漫画
+                    {colorMode === 'color' && <Check size={12} className="ml-auto text-amber-400" />}
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           {phase === 'generating-scenes' && (
             <span className="flex items-center gap-1.5 text-xs text-gray-400">

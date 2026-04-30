@@ -306,6 +306,75 @@ async def save_characters(chapter_id: int, body: dict):
     return {"ok": True}
 
 
+# ─── Reference Image (垫图) ─────────────────────────────────
+
+def _ref_image_path(chapter_id: int) -> Path:
+    return Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}" / "ref_image.png"
+
+
+@app.get("/api/chapters/{chapter_id}/ref-image")
+async def get_ref_image(chapter_id: int):
+    p = _ref_image_path(chapter_id)
+    if p.exists():
+        return {"has_ref": True, "path": str(p), "size_kb": round(p.stat().st_size / 1024)}
+    return {"has_ref": False}
+
+
+@app.post("/api/chapters/{chapter_id}/ref-image")
+async def upload_ref_image(chapter_id: int, request: Request):
+    body = await request.json()
+    b64 = body.get("image", "")
+    if not b64:
+        raise HTTPException(400, "No image provided")
+    import base64 as _b64
+    img_bytes = _b64.b64decode(b64)
+    p = _ref_image_path(chapter_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(img_bytes)
+    return {"ok": True, "size_kb": round(len(img_bytes) / 1024)}
+
+
+@app.delete("/api/chapters/{chapter_id}/ref-image")
+async def delete_ref_image(chapter_id: int):
+    p = _ref_image_path(chapter_id)
+    if p.exists():
+        p.unlink()
+    return {"ok": True}
+
+
+# ─── Color Mode ─────────────────────────────────────────────
+
+def _color_mode_path(chapter_id: int) -> Path:
+    return Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}" / "color_mode.txt"
+
+
+def _load_color_mode(chapter_id: int) -> str:
+    p = _color_mode_path(chapter_id)
+    if p.exists():
+        return p.read_text(encoding="utf-8").strip() or "bw"
+    return "bw"
+
+
+def _save_color_mode(chapter_id: int, mode: str):
+    p = _color_mode_path(chapter_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(mode, encoding="utf-8")
+
+
+@app.get("/api/chapters/{chapter_id}/color-mode")
+async def get_color_mode(chapter_id: int):
+    return {"color_mode": _load_color_mode(chapter_id)}
+
+
+@app.put("/api/chapters/{chapter_id}/color-mode")
+async def set_color_mode(chapter_id: int, body: dict):
+    mode = body.get("color_mode", "bw")
+    if mode not in ("bw", "color"):
+        raise HTTPException(400, "color_mode must be 'bw' or 'color'")
+    _save_color_mode(chapter_id, mode)
+    return {"ok": True}
+
+
 # ─── Generate Manga ─────────────────────────────────────────
 
 @app.post("/api/chapters/{chapter_id}/generate-manga")
@@ -322,7 +391,8 @@ async def generate_manga_endpoint(chapter_id: int, db: Session = Depends(get_db)
     # Step 2: Generate images for each scene (sequential to avoid rate limits)
     results: list[dict] = []
     for i, scene_prompt in enumerate(scenes, start=1):
-        image_path = await generate_manga_image(scene_prompt, chapter_id, i, character_profiles=_load_characters(chapter_id))
+        ref_img = _ref_image_path(chapter_id)
+        image_path = await generate_manga_image(scene_prompt, chapter_id, i, character_profiles=_load_characters(chapter_id), ref_image_path=str(ref_img) if ref_img.exists() else None, color_mode=_load_color_mode(chapter_id))
         manga = MangaImage(
             chapter_id=chapter_id,
             image_number=i,
@@ -447,7 +517,8 @@ async def generate_manga_stream(chapter_id: int, db: Session = Depends(get_db)):
                 }
 
                 try:
-                    image_path = await generate_manga_image(scene_prompt, chapter_id, i, all_scenes=scenes, character_profiles=_load_characters(chapter_id))
+                    ref_img = _ref_image_path(chapter_id)
+                    image_path = await generate_manga_image(scene_prompt, chapter_id, i, all_scenes=scenes, character_profiles=_load_characters(chapter_id), ref_image_path=str(ref_img) if ref_img.exists() else None, color_mode=_load_color_mode(chapter_id))
                 except Exception as img_err:
                     yield {
                         "event": "error",
@@ -556,7 +627,8 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
         db.commit()
 
     # Generate new image
-    image_path = await generate_manga_image(prompt, chapter_id, image_number, all_scenes=all_scenes, character_profiles=_load_characters(chapter_id))
+    ref_img = _ref_image_path(chapter_id)
+    image_path = await generate_manga_image(prompt, chapter_id, image_number, all_scenes=all_scenes, character_profiles=_load_characters(chapter_id), ref_image_path=str(ref_img) if ref_img.exists() else None, color_mode=_load_color_mode(chapter_id))
 
     manga = MangaImage(
         chapter_id=chapter_id,
