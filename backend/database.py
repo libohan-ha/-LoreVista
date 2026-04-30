@@ -26,3 +26,17 @@ def get_db():
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    _migrate()
+
+
+def _migrate():
+    """Add missing columns to existing tables (poor-man's migration)."""
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    if "stories" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("stories")}
+        with engine.begin() as conn:
+            if "description" not in cols:
+                conn.execute(text("ALTER TABLE stories ADD COLUMN description TEXT DEFAULT ''"))
+            if "cover_image" not in cols:
+                conn.execute(text("ALTER TABLE stories ADD COLUMN cover_image VARCHAR(500)"))

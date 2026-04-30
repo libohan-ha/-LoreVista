@@ -3,6 +3,8 @@ const BASE = '';
 export interface Story {
   id: number;
   title: string;
+  description?: string;
+  cover_image?: string | null;
   created_at: string;
 }
 
@@ -35,11 +37,11 @@ export interface Chapter {
 
 // ─── Story ──────────────────────────────────────────────────
 
-export async function createStory(title: string = '未命名故事'): Promise<Story> {
+export async function createStory(title: string = '未命名故事', description: string = ''): Promise<Story> {
   const res = await fetch(`${BASE}/api/stories`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify({ title, description }),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -49,6 +51,37 @@ export async function listStories(): Promise<Story[]> {
   const res = await fetch(`${BASE}/api/stories`);
   if (!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+export async function updateStory(storyId: number, data: { title?: string; description?: string }): Promise<Story> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteStory(storyId: number): Promise<void> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function uploadStoryCover(storyId: number, base64: string): Promise<string> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/upload-cover`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: base64 }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data.cover_image;
+}
+
+export function coverImageUrl(coverPath: string | null | undefined): string | null {
+  if (!coverPath) return null;
+  return `${BASE}/static/manga/${coverPath.replace('manga_outputs/', '')}`;
 }
 
 // ─── Chapter ────────────────────────────────────────────────

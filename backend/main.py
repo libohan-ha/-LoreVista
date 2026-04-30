@@ -19,6 +19,7 @@ from schemas import (
     MangaImageOut,
     StoryCreate,
     StoryOut,
+    StoryUpdate,
 )
 from services.deepseek import chat_stream, generate_novel, split_scenes
 from services.image2 import generate_manga_image
@@ -44,13 +45,25 @@ app.mount("/static/manga", StaticFiles(directory=str(manga_dir)), name="manga")
 @app.on_event("startup")
 def on_startup():
     init_db()
+    # One-time: rename default stories
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        for s in db.query(Story).filter(Story.title.in_(["我的第一个故事", "未命名故事"])).all():
+            if s.chapters and any(ch.messages for ch in s.chapters):
+                s.title = "转生成为暗恋公主的女仆故事"
+                s.description = "百合女仆与公主的奇幻冒险"
+            # else: leave as-is for empty stories
+        db.commit()
+    finally:
+        db.close()
 
 
 # ─── Story CRUD ─────────────────────────────────────────────
 
 @app.post("/api/stories", response_model=StoryOut)
 def create_story(body: StoryCreate, db: Session = Depends(get_db)):
-    story = Story(title=body.title)
+    story = Story(title=body.title, description=body.description)
     db.add(story)
     db.flush()
     # Auto-create first chapter
@@ -72,6 +85,70 @@ def get_story(story_id: int, db: Session = Depends(get_db)):
     if not story:
         raise HTTPException(404, "Story not found")
     return story
+
+
+@app.put("/api/stories/{story_id}", response_model=StoryOut)
+def update_story(story_id: int, body: StoryUpdate, db: Session = Depends(get_db)):
+    story = db.get(Story, story_id)
+    if not story:
+        raise HTTPException(404, "Story not found")
+    if body.title is not None:
+        story.title = body.title
+    if body.description is not None:
+        story.description = body.description
+    db.commit()
+    db.refresh(story)
+    return story
+
+
+@app.delete("/api/stories/{story_id}")
+def delete_story(story_id: int, db: Session = Depends(get_db)):
+    story = db.get(Story, story_id)
+    if not story:
+        raise HTTPException(404, "Story not found")
+    # Delete all chapters and their data
+    import shutil
+    for chapter in story.chapters:
+        chapter_dir = Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter.id}"
+        if chapter_dir.exists():
+            shutil.rmtree(chapter_dir)
+        for img in chapter.images:
+            db.delete(img)
+        for msg in chapter.messages:
+            db.delete(msg)
+        db.delete(chapter)
+    db.delete(story)
+    db.commit()
+    return {"ok": True}
+
+
+from fastapi import Request
+
+@app.post("/api/stories/{story_id}/upload-cover")
+async def upload_story_cover(story_id: int, request: Request, db: Session = Depends(get_db)):
+    story = db.get(Story, story_id)
+    if not story:
+        raise HTTPException(404, "Story not found")
+    body = await request.json()
+    b64 = body.get("image", "")
+    if not b64:
+        raise HTTPException(400, "No image provided")
+    import base64
+    import uuid
+    img_bytes = base64.b64decode(b64)
+    covers_dir = manga_dir / "covers"
+    covers_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"cover_{story_id}_{uuid.uuid4().hex[:8]}.png"
+    (covers_dir / filename).write_bytes(img_bytes)
+    # Delete old cover file if exists
+    if story.cover_image:
+        old = Path(__file__).resolve().parent / story.cover_image
+        if old.exists():
+            old.unlink(missing_ok=True)
+    story.cover_image = f"manga_outputs/covers/{filename}"
+    db.commit()
+    db.refresh(story)
+    return {"cover_image": story.cover_image}
 
 
 # ─── Chapter CRUD ───────────────────────────────────────────

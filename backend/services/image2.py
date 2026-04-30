@@ -33,7 +33,7 @@ async def generate_manga_image(prompt: str, chapter_id: int, image_number: int, 
         char_block = f"【角色外貌设定（每张图必须严格遵守）】\n{character_profiles}\n\n"
 
     MANGA_STYLE = (
-        "日式黑白漫画页，竖向多格分镜布局，每页包含3-4个分镜格，"
+        "日式黑白漫画页，竖向多格分镜布局，每页包含4-6个分镜格，"
         "格子高度不等（动作场景用宽格，对话特写用窄格），"
         "每个分镜格之间有清晰的黑色边框分隔，"
         "包含圆形/椭圆形白色对话气泡和中文台词，"

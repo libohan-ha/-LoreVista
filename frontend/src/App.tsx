@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home } from 'lucide-react';
 import ChatPanel from './components/ChatPanel';
 import MangaPanel from './components/MangaPanel';
+import HomePage from './components/HomePage';
 import {
-  createStory,
-  listStories,
   listChapters,
   createNextChapter,
   deleteChapter,
@@ -13,14 +12,13 @@ import {
   type Chapter,
 } from './api';
 
+type View = 'home' | 'editor';
+
 function App() {
+  const [view, setView] = useState<View>('home');
   const [story, setStory] = useState<Story | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
-  const [currentIdx, _setCurrentIdx] = useState(() => {
-    const hash = window.location.hash.replace('#', '');
-    const n = parseInt(hash, 10);
-    return isNaN(n) ? 0 : n;
-  });
+  const [currentIdx, _setCurrentIdx] = useState(0);
 
   const setCurrentIdx = (idx: number | ((prev: number) => number)) => {
     _setCurrentIdx((prev) => {
@@ -29,35 +27,32 @@ function App() {
       return next;
     });
   };
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   const currentChapter = chapters[currentIdx] ?? null;
 
-  // On mount: load or create story
-  useEffect(() => {
-    (async () => {
-      try {
-        const stories = await listStories();
-        let s: Story;
-        if (stories.length > 0) {
-          s = stories[0];
-        } else {
-          s = await createStory('我的第一个故事');
-        }
-        setStory(s);
-        const chs = await listChapters(s.id);
-        setChapters(chs);
-        const hash = window.location.hash.replace('#', '');
-        const saved = parseInt(hash, 10);
-        const idx = !isNaN(saved) && saved < chs.length ? saved : 0;
-        setCurrentIdx(idx);
-      } catch (err) {
-        console.error('Init failed:', err);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
+  const enterStory = async (s: Story) => {
+    setLoading(true);
+    try {
+      setStory(s);
+      const chs = await listChapters(s.id);
+      setChapters(chs);
+      setCurrentIdx(0);
+      setView('editor');
+    } catch (err) {
+      console.error('Failed to load story:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const goHome = () => {
+    setView('home');
+    setStory(null);
+    setChapters([]);
+    _setCurrentIdx(0);
+    window.location.hash = '';
+  };
 
   const refreshCurrentChapter = async () => {
     if (!currentChapter) return;
@@ -65,8 +60,13 @@ function App() {
     setChapters((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
   };
 
-  const handleChapterUpdate = (updated: Chapter) => {
-    setChapters((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+  const refreshChapter = async (chapterId: number) => {
+    try {
+      const updated = await getChapter(chapterId);
+      setChapters((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+    } catch {
+      // ignore
+    }
   };
 
   const handlePrev = () => {
@@ -77,7 +77,6 @@ function App() {
     if (currentIdx < chapters.length - 1) {
       setCurrentIdx(currentIdx + 1);
     } else if (story) {
-      // Create next chapter
       const newCh = await createNextChapter(story.id);
       setChapters((prev) => [...prev, newCh]);
       setCurrentIdx(chapters.length);
@@ -91,7 +90,6 @@ function App() {
       await deleteChapter(currentChapter.id);
       const remaining = chapters.filter((c) => c.id !== currentChapter.id);
       if (remaining.length === 0 && story) {
-        // Create a fresh chapter 1
         const newCh = await createNextChapter(story.id);
         setChapters([newCh]);
         setCurrentIdx(0);
@@ -104,6 +102,12 @@ function App() {
     }
   };
 
+  // ─── Home page ─────────────────────────────────────────
+  if (view === 'home') {
+    return <HomePage onSelectStory={enterStory} />;
+  }
+
+  // ─── Loading ───────────────────────────────────────────
   if (loading) {
     return (
       <div className="h-screen bg-gray-950 flex items-center justify-center text-gray-400">
@@ -115,13 +119,26 @@ function App() {
     );
   }
 
+  // ─── Editor view ───────────────────────────────────────
   return (
     <div className="h-screen flex flex-col bg-gray-950 text-gray-100">
       {/* Top bar */}
       <header className="h-12 border-b border-gray-800 flex items-center justify-between px-5 shrink-0 bg-gray-950/80 backdrop-blur-sm">
-        <div className="flex items-center gap-2">
-          <BookOpenText size={18} className="text-violet-400" />
-          <span className="text-sm font-semibold tracking-wide">{story?.title ?? '小说漫画生成器'}</span>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={goHome}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-gray-400 hover:text-white
+                       hover:bg-gray-800 rounded-lg transition-colors"
+            title="返回首页"
+          >
+            <Home size={14} />
+            首页
+          </button>
+          <div className="w-px h-5 bg-gray-800" />
+          <BookOpenText size={16} className="text-violet-400" />
+          <span className="text-sm font-semibold tracking-wide truncate max-w-xs">
+            {story?.title ?? '小说漫画生成器'}
+          </span>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-500">
           <span>第 {currentChapter?.chapter_number ?? '–'} 话</span>
@@ -132,14 +149,11 @@ function App() {
 
       {/* Main content: left chat + right manga */}
       <main className="flex-1 flex min-h-0">
-        {/* Left: Chat */}
         <div className="w-1/2 border-r border-gray-800">
           <ChatPanel chapter={currentChapter} onMessageSent={refreshCurrentChapter} />
         </div>
-
-        {/* Right: Manga */}
         <div className="w-1/2">
-          <MangaPanel chapter={currentChapter} />
+          <MangaPanel chapter={currentChapter} onChapterRefresh={refreshChapter} />
         </div>
       </main>
 

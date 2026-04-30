@@ -12,9 +12,11 @@ import {
   type Chapter,
   type MangaProgress,
 } from '../api';
+import { genStore } from '../genStore';
 
 interface Props {
   chapter: Chapter | null;
+  onChapterRefresh?: (chapterId: number) => void;
 }
 
 interface ImageItem {
@@ -47,7 +49,7 @@ const DEFAULT_CHARACTERS = `角色名：塞蕾娜（Serena）
 标志性配饰/道具：王女冠饰或小型王族发冠；紫晶与白蔷薇元素发饰；耳坠与颈饰常为金色与淡紫宝石；手背或胸前在动用王权共鸣时会浮现浅金色魔法纹路；偶尔携带象征王女身份的细身手杖或礼仪短扇
 气质关键词：高贵、温柔、明亮、黏人、王者感`;
 
-export default function MangaPanel({ chapter }: Props) {
+export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [progress, setProgress] = useState({ current: 0, total: 10 });
   const [statusMsg, setStatusMsg] = useState('');
@@ -66,9 +68,17 @@ export default function MangaPanel({ chapter }: Props) {
   const [charExpanded, setCharExpanded] = useState(false);
   const lightboxRef = useRef<HTMLDivElement>(null);
 
+  // Subscribe to module-level generation store so we re-render when any chapter's gen state changes
+  const [, setStoreTick] = useState(0);
+  useEffect(() => genStore.subscribe(() => setStoreTick((t) => t + 1)), []);
+  const liveGen = chapter ? genStore.get(chapter.id) : undefined;
+  const isLiveGenerating = !!(liveGen && liveGen.active);
+
   // Reset state when chapter changes
   useEffect(() => {
     setImages([]);
+    // Don't downgrade phase if there's an ongoing generation for this new chapter;
+    // the derived `generating` flag below will reflect it via genStore.
     setPhase('idle');
     setProgress({ current: 0, total: 10 });
     setStatusMsg('');
@@ -108,7 +118,12 @@ export default function MangaPanel({ chapter }: Props) {
       prompt: img.prompt || '',
     })) ?? [];
 
-  const displayImages = images.length > 0 ? images : existingImages;
+  // While generation is running for this chapter, prefer live images from the store
+  const displayImages = isLiveGenerating
+    ? liveGen!.images
+    : images.length > 0
+      ? images
+      : existingImages;
   const lightboxImg = lightboxIdx >= 0 ? displayImages[lightboxIdx] : null;
 
   // ── Scene generation ──
@@ -188,7 +203,9 @@ export default function MangaPanel({ chapter }: Props) {
 
   // ── Image generation ──
   const handleGenerateImages = async () => {
-    if (!chapter || phase === 'generating-images') return;
+    if (!chapter) return;
+    // Already generating for this chapter — ignore
+    if (genStore.get(chapter.id)?.active) return;
     // Save scenes first
     try {
       await updateScenes(chapter.id, scenes);
@@ -197,39 +214,40 @@ export default function MangaPanel({ chapter }: Props) {
       return;
     }
 
-    setPhase('generating-images');
     setImages([]);
-    setProgress({ current: 0, total: 10 });
-    setStatusMsg('正在生成漫画…');
     setErrorMsg('');
 
-    generateMangaStream(chapter.id, (event: MangaProgress) => {
+    const targetId = chapter.id;
+    genStore.start(targetId, 10);
+
+    generateMangaStream(targetId, (event: MangaProgress) => {
       switch (event.type) {
         case 'status':
-          setStatusMsg(event.data.message);
+          genStore.patch(targetId, { statusMsg: event.data.message });
           break;
         case 'progress':
-          setProgress({ current: event.data.current, total: event.data.total });
-          setStatusMsg(`正在生成第 ${event.data.current}/10 张漫画…`);
+          genStore.patch(targetId, {
+            current: event.data.current,
+            total: event.data.total,
+            statusMsg: `正在生成第 ${event.data.current}/10 张漫画…`,
+          });
           break;
         case 'image':
-          setImages((prev) => [
-            ...prev,
-            {
-              image_number: event.data.image_number,
-              image_path: event.data.image_path,
-              prompt: event.data.prompt,
-            },
-          ]);
+          genStore.pushImage(targetId, {
+            image_number: event.data.image_number,
+            image_path: event.data.image_path,
+            prompt: event.data.prompt,
+          });
           break;
         case 'done':
-          setPhase('editing-scenes');
-          setStatusMsg('');
+          genStore.finish(targetId);
+          // Refresh chapter so persisted images load from backend
+          onChapterRefresh?.(targetId);
+          // Clear in-progress entry shortly after; existingImages will take over
+          setTimeout(() => genStore.clear(targetId), 800);
           break;
         case 'error':
-          setPhase('editing-scenes');
-          setStatusMsg('');
-          setErrorMsg(event.data.error || '未知错误');
+          genStore.finish(targetId, event.data.error || '未知错误');
           break;
       }
     });
@@ -265,7 +283,12 @@ export default function MangaPanel({ chapter }: Props) {
     };
   }, [lightboxIdx, handleLightboxNav]);
 
-  const generating = phase === 'generating-images';
+  const generating = isLiveGenerating || phase === 'generating-images';
+  const liveProgress = isLiveGenerating
+    ? { current: liveGen!.current, total: liveGen!.total }
+    : progress;
+  const liveStatusMsg = isLiveGenerating ? liveGen!.statusMsg : statusMsg;
+  const liveErrorMsg = liveGen?.errorMsg || errorMsg;
   const hasImages = displayImages.length > 0;
 
   return (
@@ -293,7 +316,7 @@ export default function MangaPanel({ chapter }: Props) {
               下载
             </button>
           )}
-          {(phase === 'idle' || phase === 'editing-scenes') && (
+          {!generating && (phase === 'idle' || phase === 'editing-scenes') && (
             <button
               onClick={handleGenerateScenes}
               disabled={!chapter || !chapter?.messages?.length}
@@ -305,7 +328,7 @@ export default function MangaPanel({ chapter }: Props) {
               {scenes.length > 0 ? '重新生成分镜' : '生成分镜'}
             </button>
           )}
-          {phase === 'editing-scenes' && scenes.length === 10 && (
+          {!generating && phase === 'editing-scenes' && scenes.length === 10 && (
             <button
               onClick={handleGenerateImages}
               className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-md
@@ -328,16 +351,16 @@ export default function MangaPanel({ chapter }: Props) {
       {generating && (
         <div className="px-5 py-4 border-b border-gray-800 bg-gray-900/50">
           <div className="flex items-center justify-between text-xs mb-3">
-            <span className="text-gray-300 font-medium">{statusMsg}</span>
+            <span className="text-gray-300 font-medium">{liveStatusMsg}</span>
             <span className="text-amber-400 font-mono font-bold">
-              {Math.round((progress.current / progress.total) * 100)}%
+              {Math.round((liveProgress.current / liveProgress.total) * 100)}%
             </span>
           </div>
           <div className="w-full h-3 bg-gray-800 rounded-full overflow-hidden relative">
             <div
               className="h-full rounded-full transition-all duration-700 ease-out relative overflow-hidden"
               style={{
-                width: `${Math.max((progress.current / progress.total) * 100, 2)}%`,
+                width: `${Math.max((liveProgress.current / liveProgress.total) * 100, 2)}%`,
                 background: 'linear-gradient(90deg, #f59e0b, #fbbf24, #f59e0b)',
                 boxShadow: '0 0 12px rgba(245, 158, 11, 0.5)',
               }}
@@ -353,7 +376,7 @@ export default function MangaPanel({ chapter }: Props) {
           </div>
           <div className="flex justify-between mt-2 text-[10px] text-gray-600">
             {Array.from({ length: 10 }, (_, i) => (
-              <span key={i} className={i < progress.current ? 'text-amber-500' : ''}>
+              <span key={i} className={i < liveProgress.current ? 'text-amber-500' : ''}>
                 {i + 1}
               </span>
             ))}
@@ -362,12 +385,12 @@ export default function MangaPanel({ chapter }: Props) {
       )}
 
       {/* Error banner */}
-      {errorMsg && (
+      {liveErrorMsg && (
         <div className="mx-5 mt-3 px-4 py-3 rounded-lg bg-red-900/30 border border-red-800 text-red-300 text-sm flex items-start gap-2">
           <span className="shrink-0 mt-0.5">⚠</span>
           <div>
             <div className="font-medium mb-0.5">生成出错</div>
-            <div className="text-xs text-red-400">{errorMsg}</div>
+            <div className="text-xs text-red-400">{liveErrorMsg}</div>
           </div>
         </div>
       )}

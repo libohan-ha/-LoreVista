@@ -9,11 +9,19 @@ from pydantic import BaseModel
 # --- Story ---
 class StoryCreate(BaseModel):
     title: str = "未命名故事"
+    description: str = ""
+
+
+class StoryUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
 
 
 class StoryOut(BaseModel):
     id: int
     title: str
+    description: Optional[str] = ""
+    cover_image: Optional[str] = None
     created_at: datetime.datetime
 
     model_config = {"from_attributes": True}
