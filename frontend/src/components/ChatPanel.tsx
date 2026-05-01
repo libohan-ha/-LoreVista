@@ -1,21 +1,25 @@
 import { useEffect, useRef, useState } from 'react';
-import { Send, Image } from 'lucide-react';
+import { Send, Image, Square } from 'lucide-react';
 import { chatStream, type Chapter } from '../api';
 
 interface Props {
   chapter: Chapter | null;
   onMessageSent?: () => void;
+  onChapterRefresh?: (chapterId: number) => void;
   onGoToManga?: () => void;
 }
 
-export default function ChatPanel({ chapter, onMessageSent, onGoToManga }: Props) {
+export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, onGoToManga }: Props) {
   const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [streamContent, setStreamContent] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const streamingChapterIdRef = useRef<number | null>(null);
+  const userScrolledUp = useRef(false);
 
   const autoResize = (el: HTMLTextAreaElement) => {
     el.style.height = 'auto';
@@ -25,9 +29,14 @@ export default function ChatPanel({ chapter, onMessageSent, onGoToManga }: Props
   useEffect(() => {
     // Abort any in-progress stream when switching chapters
     if (abortRef.current) {
+      const abortedChapterId = streamingChapterIdRef.current;
       abortRef.current.abort();
       abortRef.current = null;
+      if (abortedChapterId !== null) {
+        window.setTimeout(() => onChapterRefresh?.(abortedChapterId), 500);
+      }
     }
+    streamingChapterIdRef.current = null;
     if (chapter) {
       setMessages(chapter.messages.map((m) => ({ role: m.role, content: m.content })));
     } else {
@@ -37,9 +46,30 @@ export default function ChatPanel({ chapter, onMessageSent, onGoToManga }: Props
     setStreaming(false);
   }, [chapter?.id]);
 
+  // Auto-scroll only if user hasn't scrolled up.
+  // Use instant scroll during streaming to avoid animation fighting with user scroll.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (!userScrolledUp.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: streaming ? 'instant' : 'smooth' });
+    }
   }, [messages, streamContent]);
+
+  // Reset scroll lock when user sends a new message
+  useEffect(() => {
+    userScrolledUp.current = false;
+  }, [messages.length]);
+
+  // Detect manual scroll
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const handleScroll = () => {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      userScrolledUp.current = !atBottom;
+    };
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, []);
 
   const handleSend = () => {
     if (!input.trim() || !chapter || streaming) return;
@@ -51,6 +81,7 @@ export default function ChatPanel({ chapter, onMessageSent, onGoToManga }: Props
     setStreamContent('');
 
     let accumulated = '';
+    streamingChapterIdRef.current = chapter.id;
     abortRef.current = chatStream(
       chapter.id,
       userMsg.content,
@@ -59,17 +90,42 @@ export default function ChatPanel({ chapter, onMessageSent, onGoToManga }: Props
         setStreamContent(accumulated);
       },
       (fullContent) => {
+        abortRef.current = null;
+        streamingChapterIdRef.current = null;
         setMessages((prev) => [...prev, { role: 'assistant', content: fullContent }]);
         setStreamContent('');
         setStreaming(false);
         onMessageSent?.();
       },
       (err) => {
+        abortRef.current = null;
+        streamingChapterIdRef.current = null;
         setMessages((prev) => [...prev, { role: 'assistant', content: `错误: ${err}` }]);
         setStreamContent('');
         setStreaming(false);
       },
     );
+  };
+
+  const handleAbort = () => {
+    const abortedChapterId = streamingChapterIdRef.current;
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    streamingChapterIdRef.current = null;
+    if (streamContent) {
+      setMessages((prev) => [...prev, { role: 'assistant', content: streamContent + '\n\n[已中止]' }]);
+    }
+    setStreamContent('');
+    setStreaming(false);
+    window.setTimeout(() => {
+      if (abortedChapterId !== null) {
+        onChapterRefresh?.(abortedChapterId);
+      } else {
+        onMessageSent?.();
+      }
+    }, 500);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -89,7 +145,7 @@ export default function ChatPanel({ chapter, onMessageSent, onGoToManga }: Props
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
         {messages.length === 0 && !streaming && (
           <div className="flex items-center justify-center h-full text-gray-600 text-sm">
             开始和 AI 讨论你的小说创意吧…
@@ -160,14 +216,24 @@ export default function ChatPanel({ chapter, onMessageSent, onGoToManga }: Props
             className="flex-1 bg-transparent text-sm text-gray-200 placeholder-gray-600 resize-none outline-none"
             style={{ maxHeight: '160px', overflow: 'auto' }}
           />
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || streaming}
-            className="p-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-30
-                       disabled:cursor-not-allowed transition-colors shrink-0"
-          >
-            <Send size={16} />
-          </button>
+          {streaming ? (
+            <button
+              onClick={handleAbort}
+              className="p-2 rounded-lg bg-red-600 hover:bg-red-500 text-white transition-colors shrink-0"
+              title="停止生成"
+            >
+              <Square size={16} />
+            </button>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled={!input.trim()}
+              className="p-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-30
+                         disabled:cursor-not-allowed transition-colors shrink-0"
+            >
+              <Send size={16} />
+            </button>
+          )}
         </div>
       </div>
     </div>

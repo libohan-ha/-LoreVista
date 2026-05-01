@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronUp, ChevronDown, Download, ImageIcon, Loader2, Sparkles, Pencil, RefreshCw, Check, X, ImagePlus, Trash2 } from 'lucide-react';
+import { ChevronUp, ChevronDown, Download, ImageIcon, Loader2, Sparkles, Pencil, RefreshCw, Check, X, ImagePlus, Trash2, Square } from 'lucide-react';
 import {
   generateMangaStream,
   generateScenes,
@@ -8,15 +8,20 @@ import {
   regenerateImage,
   getCharacters,
   saveCharacters,
+  resetChapterCharacters,
   getRefImage,
   uploadRefImage,
   deleteRefImage,
   getColorMode,
   setColorMode,
+  getImageCount,
+  setImageCount,
+  ALLOWED_IMAGE_COUNTS,
   mangaImageUrl,
   type Chapter,
   type MangaProgress,
   type ColorMode,
+  type RefSource,
 } from '../api';
 import { genStore } from '../genStore';
 
@@ -32,10 +37,11 @@ interface ImageItem {
 }
 
 type Phase = 'idle' | 'generating-scenes' | 'editing-scenes' | 'generating-images';
+const DEFAULT_IMAGE_COUNT = 10;
 
 export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
-  const [progress, setProgress] = useState({ current: 0, total: 10 });
+  const [progress, setProgress] = useState({ current: 0, total: DEFAULT_IMAGE_COUNT });
   const [statusMsg, setStatusMsg] = useState('');
   const [images, setImages] = useState<ImageItem[]>([]);
   const [lightboxIdx, setLightboxIdx] = useState<number>(-1);
@@ -46,17 +52,23 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const [savingScenes, setSavingScenes] = useState(false);
   const [regenIdx, setRegenIdx] = useState<number>(-1);
   const [charText, setCharText] = useState('');
+  const [charSource, setCharSource] = useState<'chapter' | 'story' | 'none'>('none');
   const [charEditing, setCharEditing] = useState(false);
   const [charDraft, setCharDraft] = useState('');
   const [charSaving, setCharSaving] = useState(false);
   const [charExpanded, setCharExpanded] = useState(false);
   const [hasRefImage, setHasRefImage] = useState(false);
+  const [refSource, setRefSource] = useState<RefSource>('none');
   const [refUploading, setRefUploading] = useState(false);
   const [colorMode, setColorModeState] = useState<ColorMode>('bw');
+  const [imageCount, setImageCountState] = useState(DEFAULT_IMAGE_COUNT);
   const [showColorMenu, setShowColorMenu] = useState(false);
   const colorMenuRef = useRef<HTMLDivElement>(null);
   const refFileRef = useRef<HTMLInputElement>(null);
   const lightboxRef = useRef<HTMLDivElement>(null);
+  const chapterLoadRequestRef = useRef(0);
+  const sceneAbortRef = useRef<AbortController | null>(null);
+  const mangaAbortRef = useRef<Map<number, AbortController>>(new Map());
 
   // Subscribe to module-level generation store so we re-render when any chapter's gen state changes
   const [, setStoreTick] = useState(0);
@@ -66,11 +78,15 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
 
   // Reset state when chapter changes
   useEffect(() => {
+    // Abort any in-flight scene generation when switching chapters
+    sceneAbortRef.current?.abort();
+    sceneAbortRef.current = null;
+    const requestId = ++chapterLoadRequestRef.current;
     setImages([]);
     // Don't downgrade phase if there's an ongoing generation for this new chapter;
     // the derived `generating` flag below will reflect it via genStore.
     setPhase('idle');
-    setProgress({ current: 0, total: 10 });
+    setProgress({ current: 0, total: DEFAULT_IMAGE_COUNT });
     setStatusMsg('');
     setErrorMsg('');
     setLightboxIdx(-1);
@@ -78,23 +94,38 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     setEditingIdx(-1);
     setRegenIdx(-1);
     setCharText('');
+    setCharSource('none');
     setCharEditing(false);
     setCharExpanded(false);
     setHasRefImage(false);
+    setRefSource('none');
     setColorModeState('bw');
+    setImageCountState(DEFAULT_IMAGE_COUNT);
     setShowColorMenu(false);
     // Load existing scenes and characters if available
     if (chapter) {
-      getRefImage(chapter.id).then((r) => setHasRefImage(r.has_ref)).catch(() => {});
-      getColorMode(chapter.id).then((m) => setColorModeState(m)).catch(() => {});
+      getRefImage(chapter.id).then((r) => {
+        if (chapterLoadRequestRef.current !== requestId) return;
+        setHasRefImage(r.has_ref);
+        setRefSource(r.source);
+      }).catch(() => {});
+      getColorMode(chapter.id).then((m) => {
+        if (chapterLoadRequestRef.current === requestId) setColorModeState(m);
+      }).catch(() => {});
+      getImageCount(chapter.id).then((c) => {
+        if (chapterLoadRequestRef.current === requestId) setImageCountState(c);
+      }).catch(() => {});
       getScenes(chapter.id).then((s) => {
-        if (s.length === 10) {
+        if (chapterLoadRequestRef.current !== requestId) return;
+        if (s.length > 0) {
           setScenes(s);
           setPhase('editing-scenes');
         }
       }).catch(() => {});
-      getCharacters(chapter.id).then((c) => {
-        setCharText(c || '');
+      getCharacters(chapter.id).then((r) => {
+        if (chapterLoadRequestRef.current !== requestId) return;
+        setCharText(r.characters || '');
+        setCharSource(r.source);
       }).catch(() => {});
     }
   }, [chapter?.id]);
@@ -124,14 +155,33 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     }
     setPhase('generating-scenes');
     setErrorMsg('');
+    const controller = new AbortController();
+    sceneAbortRef.current = controller;
+    const requestId = chapterLoadRequestRef.current;
+    const hadScenes = scenes.length > 0;
     try {
-      const result = await generateScenes(chapter.id);
+      const result = await generateScenes(chapter.id, controller.signal);
+      if (chapterLoadRequestRef.current !== requestId) return;
       setScenes(result);
       setPhase('editing-scenes');
     } catch (err: any) {
-      setErrorMsg(err.message);
-      setPhase('idle');
+      if (chapterLoadRequestRef.current !== requestId) return;
+      if (err.name === 'AbortError') {
+        setPhase(hadScenes ? 'editing-scenes' : 'idle');
+      } else {
+        setErrorMsg(err.message);
+        setPhase(hadScenes ? 'editing-scenes' : 'idle');
+      }
+    } finally {
+      if (sceneAbortRef.current === controller) {
+        sceneAbortRef.current = null;
+      }
     }
+  };
+
+  const handleAbortScenes = () => {
+    sceneAbortRef.current?.abort();
+    sceneAbortRef.current = null;
   };
 
   // ── Scene editing ──
@@ -202,15 +252,15 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     return () => document.removeEventListener('mousedown', handler);
   }, [showColorMenu]);
 
-  // ── Image generation ──
-  const handleGenerateWithMode = async (mode: ColorMode) => {
+  // ── Color mode selection ──
+  const handleSelectColorMode = async (mode: ColorMode) => {
     if (!chapter) return;
     setShowColorMenu(false);
-    // Save color mode
     await setColorMode(chapter.id, mode);
     setColorModeState(mode);
-    handleGenerateImages();
   };
+
+  // ── Image generation ──
 
   const handleGenerateImages = async () => {
     if (!chapter) return;
@@ -228,9 +278,9 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     setErrorMsg('');
 
     const targetId = chapter.id;
-    genStore.start(targetId, 10);
+    genStore.start(targetId, imageCount);
 
-    generateMangaStream(targetId, (event: MangaProgress) => {
+    const controller = generateMangaStream(targetId, (event: MangaProgress) => {
       switch (event.type) {
         case 'status':
           genStore.patch(targetId, { statusMsg: event.data.message });
@@ -239,7 +289,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
           genStore.patch(targetId, {
             current: event.data.current,
             total: event.data.total,
-            statusMsg: `正在生成第 ${event.data.current}/10 张漫画…`,
+            statusMsg: `正在生成第 ${event.data.current}/${event.data.total} 张漫画…`,
           });
           break;
         case 'image':
@@ -250,17 +300,31 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
           });
           break;
         case 'done':
+          mangaAbortRef.current.delete(targetId);
           genStore.finish(targetId);
-          // Refresh chapter so persisted images load from backend
           onChapterRefresh?.(targetId);
-          // Clear in-progress entry shortly after; existingImages will take over
           setTimeout(() => genStore.clear(targetId), 800);
           break;
         case 'error':
+          mangaAbortRef.current.delete(targetId);
           genStore.finish(targetId, event.data.error || '未知错误');
           break;
       }
     });
+    mangaAbortRef.current.set(targetId, controller);
+  };
+
+  const handleAbortManga = () => {
+    if (!chapter) return;
+    const targetId = chapter.id;
+    const state = genStore.get(targetId);
+    mangaAbortRef.current.get(targetId)?.abort();
+    mangaAbortRef.current.delete(targetId);
+    if (state?.images.length) {
+      setImages(state.images);
+    }
+    genStore.finish(targetId, '已中止生成');
+    window.setTimeout(() => onChapterRefresh?.(targetId), 700);
   };
 
   // ── Lightbox keyboard/scroll navigation ──
@@ -300,6 +364,8 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const liveStatusMsg = isLiveGenerating ? liveGen!.statusMsg : statusMsg;
   const liveErrorMsg = liveGen?.errorMsg || errorMsg;
   const hasImages = displayImages.length > 0;
+  const canChangeImageCount = !generating && scenes.length === 0 && !hasImages;
+  const activeImageCount = liveProgress.total || imageCount;
 
   return (
     <div className="flex flex-col h-full bg-gray-950">
@@ -328,6 +394,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                   });
                   await uploadRefImage(chapter.id, b64);
                   setHasRefImage(true);
+                  setRefSource('chapter');
                 } catch (err: any) {
                   setErrorMsg(`上传垫图失败: ${err.message}`);
                 } finally {
@@ -344,25 +411,65 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                   ? 'bg-emerald-900/50 hover:bg-emerald-800 text-emerald-300 border border-emerald-700'
                   : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
                 } disabled:opacity-40`}
-              title={hasRefImage ? '已设置垫图（点击更换）' : '上传垫图参考'}
+              title={
+                hasRefImage
+                  ? refSource === 'story' ? '垫图（继承自全局）· 点击上传本章覆盖' : '已设置垫图（点击更换）'
+                  : '上传垫图参考'
+              }
             >
               {refUploading ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
-              {hasRefImage ? '已垫图' : '垫图'}
+              {hasRefImage
+                ? refSource === 'story' ? '全局垫图' : '已垫图'
+                : '垫图'}
             </button>
-            {hasRefImage && (
+            {hasRefImage && refSource === 'chapter' && (
               <button
                 onClick={async () => {
                   if (!chapter) return;
                   await deleteRefImage(chapter.id);
-                  setHasRefImage(false);
+                  // Re-fetch to check if story-level fallback exists
+                  try {
+                    const r = await getRefImage(chapter.id);
+                    setHasRefImage(r.has_ref);
+                    setRefSource(r.source);
+                  } catch {
+                    setHasRefImage(false);
+                    setRefSource('none');
+                  }
                 }}
                 className="p-1.5 text-gray-600 hover:text-red-400 rounded transition-colors"
-                title="移除垫图"
+                title="移除本章垫图（恢复使用全局垫图）"
               >
                 <Trash2 size={12} />
               </button>
             )}
           </div>
+          {/* Image count selector */}
+          {!generating && (phase === 'idle' || phase === 'editing-scenes') && (
+            <select
+              value={imageCount}
+              onChange={async (e) => {
+                const count = Number(e.target.value);
+                const previous = imageCount;
+                setImageCountState(count);
+                if (chapter) {
+                  try {
+                    await setImageCount(chapter.id, count);
+                  } catch (err: any) {
+                    setImageCountState(previous);
+                    setErrorMsg(`保存生成张数失败: ${err.message}`);
+                  }
+                }
+              }}
+              disabled={!canChangeImageCount}
+              className="px-2 py-1.5 text-xs font-medium rounded-md bg-gray-800 text-gray-300 border border-gray-700 outline-none focus:border-violet-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              title={canChangeImageCount ? '生成张数' : '已有分镜或图片时不能修改生成张数'}
+            >
+              {ALLOWED_IMAGE_COUNTS.map((n) => (
+                <option key={n} value={n}>{n}张</option>
+              ))}
+            </select>
+          )}
           {hasImages && (
             <button
               onClick={() => {
@@ -392,46 +499,75 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
               {scenes.length > 0 ? '重新生成分镜' : '生成分镜'}
             </button>
           )}
-          {!generating && phase === 'editing-scenes' && scenes.length === 10 && (
-            <div className="relative" ref={colorMenuRef}>
+          {!generating && phase === 'editing-scenes' && scenes.length > 0 && (
+            <>
+              {/* Color mode selector */}
+              <div className="relative" ref={colorMenuRef}>
+                <button
+                  onClick={() => setShowColorMenu((v) => !v)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors
+                    ${colorMode === 'color'
+                      ? 'bg-pink-900/50 hover:bg-pink-800 text-pink-300 border border-pink-700'
+                      : 'bg-gray-800 hover:bg-gray-700 text-gray-300'}`}
+                >
+                  {colorMode === 'color' ? (
+                    <span className="w-3 h-3 rounded-full bg-gradient-to-br from-pink-400 via-blue-400 to-green-400 shrink-0" />
+                  ) : (
+                    <span className="w-3 h-3 rounded-full bg-gradient-to-br from-white to-gray-600 shrink-0" />
+                  )}
+                  {colorMode === 'color' ? '彩色' : '黑白'}
+                  <ChevronDown size={11} className={`transition-transform ${showColorMenu ? 'rotate-180' : ''}`} />
+                </button>
+                {showColorMenu && (
+                  <div className="absolute right-0 top-full mt-1 w-40 rounded-lg border border-gray-700 bg-gray-900 shadow-xl z-50 overflow-hidden">
+                    <button
+                      onClick={() => handleSelectColorMode('bw')}
+                      className={`w-full flex items-center gap-2 px-3 py-2.5 text-xs transition-colors hover:bg-gray-800
+                        ${colorMode === 'bw' ? 'text-amber-400 font-semibold' : 'text-gray-300'}`}
+                    >
+                      <span className="w-4 h-4 rounded border-2 border-gray-500 bg-gradient-to-br from-white to-gray-900 shrink-0" />
+                      黑白漫画
+                      {colorMode === 'bw' && <Check size={12} className="ml-auto text-amber-400" />}
+                    </button>
+                    <button
+                      onClick={() => handleSelectColorMode('color')}
+                      className={`w-full flex items-center gap-2 px-3 py-2.5 text-xs transition-colors hover:bg-gray-800
+                        ${colorMode === 'color' ? 'text-amber-400 font-semibold' : 'text-gray-300'}`}
+                    >
+                      <span className="w-4 h-4 rounded border-2 border-gray-500 bg-gradient-to-br from-pink-400 via-blue-400 to-green-400 shrink-0" />
+                      彩色漫画
+                      {colorMode === 'color' && <Check size={12} className="ml-auto text-amber-400" />}
+                    </button>
+                  </div>
+                )}
+              </div>
+              {/* Generate button */}
               <button
-                onClick={() => setShowColorMenu((v) => !v)}
+                onClick={handleGenerateImages}
                 className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-md
                            bg-amber-500 hover:bg-amber-400 text-gray-950 transition-colors"
               >
                 <Sparkles size={13} />
-                {existingImages.length > 0 && existingImages.length < 10 ? '继续生成漫画' : '生成漫画'}
-                <ChevronDown size={12} className={`transition-transform ${showColorMenu ? 'rotate-180' : ''}`} />
+                {existingImages.length > 0 && existingImages.length < imageCount ? '继续生成漫画' : '生成漫画'}
               </button>
-              {showColorMenu && (
-                <div className="absolute right-0 top-full mt-1 w-44 rounded-lg border border-gray-700 bg-gray-900 shadow-xl z-50 overflow-hidden">
-                  <button
-                    onClick={() => handleGenerateWithMode('bw')}
-                    className={`w-full flex items-center gap-2 px-3 py-2.5 text-xs transition-colors hover:bg-gray-800
-                      ${colorMode === 'bw' ? 'text-amber-400 font-semibold' : 'text-gray-300'}`}
-                  >
-                    <span className="w-4 h-4 rounded border-2 border-gray-500 bg-gradient-to-br from-white to-gray-900 shrink-0" />
-                    黑白漫画
-                    {colorMode === 'bw' && <Check size={12} className="ml-auto text-amber-400" />}
-                  </button>
-                  <button
-                    onClick={() => handleGenerateWithMode('color')}
-                    className={`w-full flex items-center gap-2 px-3 py-2.5 text-xs transition-colors hover:bg-gray-800
-                      ${colorMode === 'color' ? 'text-amber-400 font-semibold' : 'text-gray-300'}`}
-                  >
-                    <span className="w-4 h-4 rounded border-2 border-gray-500 bg-gradient-to-br from-pink-400 via-blue-400 to-green-400 shrink-0" />
-                    彩色漫画
-                    {colorMode === 'color' && <Check size={12} className="ml-auto text-amber-400" />}
-                  </button>
-                </div>
-              )}
-            </div>
+            </>
           )}
           {phase === 'generating-scenes' && (
-            <span className="flex items-center gap-1.5 text-xs text-gray-400">
-              <Loader2 size={13} className="animate-spin" />
-              AI 生成分镜中…
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="flex items-center gap-1.5 text-xs text-gray-400">
+                <Loader2 size={13} className="animate-spin" />
+                AI 生成分镜中…
+              </span>
+              <button
+                onClick={handleAbortScenes}
+                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md
+                           bg-red-900/50 hover:bg-red-800 text-red-300 border border-red-700 transition-colors"
+                title="停止生成分镜"
+              >
+                <Square size={11} />
+                停止
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -441,9 +577,20 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
         <div className="px-5 py-4 border-b border-gray-800 bg-gray-900/50">
           <div className="flex items-center justify-between text-xs mb-3">
             <span className="text-gray-300 font-medium">{liveStatusMsg}</span>
-            <span className="text-amber-400 font-mono font-bold">
-              {Math.round((liveProgress.current / liveProgress.total) * 100)}%
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleAbortManga}
+                className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md
+                           bg-red-900/50 hover:bg-red-800 text-red-300 border border-red-700 transition-colors"
+                title="停止生成漫画"
+              >
+                <Square size={10} />
+                停止
+              </button>
+              <span className="text-amber-400 font-mono font-bold">
+                {Math.round((liveProgress.current / liveProgress.total) * 100)}%
+              </span>
+            </div>
           </div>
           <div className="w-full h-3 bg-gray-800 rounded-full overflow-hidden relative">
             <div
@@ -464,7 +611,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             </div>
           </div>
           <div className="flex justify-between mt-2 text-[10px] text-gray-600">
-            {Array.from({ length: 10 }, (_, i) => (
+            {Array.from({ length: liveProgress.total }, (_, i) => (
               <span key={i} className={i < liveProgress.current ? 'text-amber-500' : ''}>
                 {i + 1}
               </span>
@@ -493,7 +640,16 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
               onClick={() => setCharExpanded((v) => !v)}
               className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-gray-400 uppercase tracking-wide hover:bg-gray-800/40 transition-colors"
             >
-              <span>🎭 角色外貌卡 {charText ? '（已设定）' : '（未设定）'}</span>
+              <span className="flex items-center gap-1.5">
+                🎭 角色外貌卡
+                {charText && charSource === 'story' && (
+                  <span className="text-[10px] font-normal normal-case px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-400 border border-blue-800/50">继承自首页</span>
+                )}
+                {charText && charSource === 'chapter' && (
+                  <span className="text-[10px] font-normal normal-case px-1.5 py-0.5 rounded bg-emerald-900/50 text-emerald-400 border border-emerald-800/50">本话自定义</span>
+                )}
+                {!charText && '（未设定）'}
+              </span>
               {charExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
             </button>
             {charExpanded && (
@@ -521,6 +677,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                           try {
                             await saveCharacters(chapter.id, charDraft);
                             setCharText(charDraft);
+                            setCharSource('chapter');
                             setCharEditing(false);
                           } catch (err: any) {
                             setErrorMsg(err.message);
@@ -529,16 +686,34 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                           }
                         }}
                         className="px-3 py-1 text-xs rounded bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-40 transition-colors"
-                      >{charSaving ? '保存中…' : '保存'}</button>
+                      >{charSaving ? '保存中…' : '保存（本话覆盖）'}</button>
                     </div>
                   </>
                 ) : charText ? (
                   <>
                     <pre className="text-xs text-gray-400 leading-relaxed whitespace-pre-wrap max-h-48 overflow-y-auto">{charText}</pre>
-                    <button
-                      onClick={() => { setCharDraft(charText); setCharEditing(true); }}
-                      className="mt-2 flex items-center gap-1 text-xs text-violet-400 hover:text-violet-300 transition-colors"
-                    ><Pencil size={11} /> 编辑</button>
+                    <div className="mt-2 flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={() => { setCharDraft(charText); setCharEditing(true); }}
+                        className="flex items-center gap-1 text-xs text-violet-400 hover:text-violet-300 transition-colors"
+                      ><Pencil size={11} /> 编辑</button>
+                      {charSource === 'chapter' && (
+                        <button
+                          onClick={async () => {
+                            if (!chapter) return;
+                            try {
+                              await resetChapterCharacters(chapter.id);
+                              const r = await getCharacters(chapter.id);
+                              setCharText(r.characters || '');
+                              setCharSource(r.source);
+                            } catch (err: any) {
+                              setErrorMsg(err.message);
+                            }
+                          }}
+                          className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                        ><RefreshCw size={11} /> 恢复全局设定</button>
+                      )}
+                    </div>
                   </>
                 ) : (
                   <button
@@ -552,7 +727,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
         )}
 
         {/* Scene-only editor (when no images yet) */}
-        {scenes.length === 10 && displayImages.length === 0 && !generating && (
+        {scenes.length > 0 && displayImages.length === 0 && !generating && (
           <div className="mb-6">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">分镜脚本（可编辑）</h3>
@@ -630,7 +805,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                     loading="lazy"
                   />
                   <div className="absolute top-3 left-3 px-2 py-0.5 bg-black/70 rounded text-[10px] text-gray-300 font-mono">
-                    {img.image_number}/10
+                    {img.image_number}/{imageCount}
                   </div>
                   {isRegenerating && (
                     <div className="absolute inset-0 flex items-center justify-center">
@@ -693,9 +868,9 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
         </div>
 
         {/* Loading placeholders */}
-        {generating && displayImages.length < 10 && (
+        {generating && displayImages.length < activeImageCount && (
           <div className="mt-6 space-y-6">
-            {Array.from({ length: 10 - displayImages.length }, (_, i) => (
+            {Array.from({ length: Math.max(activeImageCount - displayImages.length, 0) }, (_, i) => (
               <div
                 key={`placeholder-${i}`}
                 className="rounded-xl border border-gray-800 bg-gray-900/50 h-64 flex items-center justify-center"
@@ -726,7 +901,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
           </button>
           {/* Counter */}
           <div className="absolute top-4 left-4 px-3 py-1 bg-white/10 rounded-full text-sm text-white font-mono">
-            {lightboxImg.image_number} / 10
+            {lightboxImg.image_number} / {imageCount}
           </div>
           {/* Nav up */}
           {lightboxIdx > 0 && (

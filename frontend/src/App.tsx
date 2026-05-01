@@ -68,12 +68,12 @@ function App() {
           return;
         }
         const chs = await listChapters(s.id);
-        const savedIdx = Number(localStorage.getItem(LS_CHAPTER_IDX) ?? '0');
-        const idx = Math.max(0, Math.min(savedIdx, chs.length - 1));
+        const idx = Math.max(0, chs.length - 1);
         setStory(s);
         setChapters(chs);
         _setCurrentIdx(idx);
         window.location.hash = String(idx);
+        localStorage.setItem(LS_CHAPTER_IDX, String(idx));
         setView('editor');
       } catch (err) {
         console.error('Failed to restore session:', err);
@@ -92,7 +92,7 @@ function App() {
       localStorage.setItem(LS_STORY_ID, String(s.id));
       const chs = await listChapters(s.id);
       setChapters(chs);
-      setCurrentIdx(0);
+      setCurrentIdx(Math.max(0, chs.length - 1));
       setView('editor');
     } catch (err) {
       console.error('Failed to load story:', err);
@@ -245,6 +245,7 @@ function App() {
             <ChatPanel
               chapter={currentChapter}
               onMessageSent={refreshCurrentChapter}
+              onChapterRefresh={refreshChapter}
               onGoToManga={() => setMobileTab('manga')}
             />
           </div>
@@ -255,7 +256,7 @@ function App() {
       ) : (
         <main className="flex-1 flex min-h-0">
           <div className="w-1/2 border-r border-gray-800">
-            <ChatPanel chapter={currentChapter} onMessageSent={refreshCurrentChapter} />
+            <ChatPanel chapter={currentChapter} onMessageSent={refreshCurrentChapter} onChapterRefresh={refreshChapter} />
           </div>
           <div className="w-1/2">
             <MangaPanel chapter={currentChapter} onChapterRefresh={refreshChapter} />
@@ -276,18 +277,17 @@ function App() {
           {!isMobile && '上一话'}
         </button>
 
-        {!isMobile && (
-          <button
-            onClick={handleDelete}
-            disabled={!currentChapter}
-            className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg
-                       bg-red-900/50 hover:bg-red-800 text-red-300 disabled:opacity-30
-                       disabled:cursor-not-allowed transition-colors"
-            title="删除当前话"
-          >
-            <Trash2 size={14} />
-          </button>
-        )}
+        <button
+          onClick={handleDelete}
+          disabled={!currentChapter}
+          className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg
+                     bg-red-900/50 hover:bg-red-800 text-red-300 disabled:opacity-30
+                     disabled:cursor-not-allowed transition-colors"
+          title="删除当前话"
+          aria-label="删除当前话"
+        >
+          <Trash2 size={14} />
+        </button>
 
         <div className="flex items-center gap-1 text-xs text-gray-600">
           {chapters.map((_, i) => (

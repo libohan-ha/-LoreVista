@@ -46,6 +46,8 @@ def _migrate():
                 conn.execute(text("ALTER TABLE stories ADD COLUMN description TEXT DEFAULT ''"))
             if "cover_image" not in cols:
                 conn.execute(text("ALTER TABLE stories ADD COLUMN cover_image VARCHAR(500)"))
+            if "character_profiles" not in cols:
+                conn.execute(text("ALTER TABLE stories ADD COLUMN character_profiles TEXT DEFAULT ''"))
     _cleanup_duplicate_chapters()
     _cleanup_duplicate_manga_images()
     _add_unique_constraints()

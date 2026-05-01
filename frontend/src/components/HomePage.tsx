@@ -9,6 +9,8 @@ import {
   X,
   Check,
   Sparkles,
+  Users,
+  Loader2,
 } from 'lucide-react';
 import {
   listStories,
@@ -17,6 +19,12 @@ import {
   deleteStory,
   uploadStoryCover,
   coverImageUrl,
+  getStoryCharacters,
+  saveStoryCharacters,
+  getStoryRefImage,
+  uploadStoryRefImage,
+  deleteStoryRefImage,
+  storyRefImageUrl,
   type Story,
 } from '../api';
 
@@ -41,6 +49,103 @@ export default function HomePage({ onSelectStory }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploadingCover, setUploadingCover] = useState<number | null>(null);
 
+  // Character card modal
+  const [charModalStoryId, setCharModalStoryId] = useState<number | null>(null);
+  const [charModalText, setCharModalText] = useState('');
+  const [charModalLoading, setCharModalLoading] = useState(false);
+  const [charModalSaving, setCharModalSaving] = useState(false);
+  const [storyCharFlags, setStoryCharFlags] = useState<Record<number, boolean>>({});
+  const charModalRequestRef = useRef(0);
+
+  // Ref image modal
+  const [refModalStoryId, setRefModalStoryId] = useState<number | null>(null);
+  const [refModalHasImage, setRefModalHasImage] = useState(false);
+  const [refModalLoading, setRefModalLoading] = useState(false);
+  const [refModalUploading, setRefModalUploading] = useState(false);
+  const [storyRefFlags, setStoryRefFlags] = useState<Record<number, boolean>>({});
+  const refModalRequestRef = useRef(0);
+  const refModalFileRef = useRef<HTMLInputElement>(null);
+
+  const openCharModal = async (storyId: number) => {
+    const requestId = ++charModalRequestRef.current;
+    setCharModalStoryId(storyId);
+    setCharModalText('');
+    setCharModalLoading(true);
+    try {
+      const text = await getStoryCharacters(storyId);
+      if (charModalRequestRef.current !== requestId) return;
+      setCharModalText(text);
+    } catch {
+      if (charModalRequestRef.current !== requestId) return;
+      setCharModalText('');
+    } finally {
+      if (charModalRequestRef.current !== requestId) return;
+      setCharModalLoading(false);
+    }
+  };
+
+  const saveCharModal = async () => {
+    if (charModalStoryId === null) return;
+    setCharModalSaving(true);
+    try {
+      await saveStoryCharacters(charModalStoryId, charModalText);
+      setStoryCharFlags((prev) => ({ ...prev, [charModalStoryId]: !!charModalText.trim() }));
+      setCharModalStoryId(null);
+    } catch (err: any) {
+      alert(`保存失败: ${err.message}`);
+    } finally {
+      setCharModalSaving(false);
+    }
+  };
+
+  const openRefModal = async (storyId: number) => {
+    const requestId = ++refModalRequestRef.current;
+    setRefModalStoryId(storyId);
+    setRefModalHasImage(false);
+    setRefModalLoading(true);
+    try {
+      const r = await getStoryRefImage(storyId);
+      if (refModalRequestRef.current !== requestId) return;
+      setRefModalHasImage(r.has_ref);
+    } catch {
+      if (refModalRequestRef.current !== requestId) return;
+      setRefModalHasImage(false);
+    } finally {
+      if (refModalRequestRef.current !== requestId) return;
+      setRefModalLoading(false);
+    }
+  };
+
+  const handleRefUpload = async (file: File) => {
+    if (refModalStoryId === null) return;
+    setRefModalUploading(true);
+    try {
+      const reader = new FileReader();
+      const b64 = await new Promise<string>((resolve) => {
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.readAsDataURL(file);
+      });
+      await uploadStoryRefImage(refModalStoryId, b64);
+      setRefModalHasImage(true);
+      setStoryRefFlags((prev) => ({ ...prev, [refModalStoryId]: true }));
+    } catch (err: any) {
+      alert(`上传垫图失败: ${err.message}`);
+    } finally {
+      setRefModalUploading(false);
+    }
+  };
+
+  const handleRefDelete = async () => {
+    if (refModalStoryId === null) return;
+    try {
+      await deleteStoryRefImage(refModalStoryId);
+      setRefModalHasImage(false);
+      setStoryRefFlags((prev) => ({ ...prev, [refModalStoryId]: false }));
+    } catch (err: any) {
+      alert(`删除垫图失败: ${err.message}`);
+    }
+  };
+
   useEffect(() => {
     loadStories();
   }, []);
@@ -49,6 +154,14 @@ export default function HomePage({ onSelectStory }: Props) {
     try {
       const list = await listStories();
       setStories(list);
+      const charFlags = Object.fromEntries(
+        list.map((s) => [s.id, !!s.has_character_profiles])
+      );
+      setStoryCharFlags(charFlags);
+      const refFlags = Object.fromEntries(
+        list.map((s) => [s.id, !!s.has_ref_image])
+      );
+      setStoryRefFlags(refFlags);
     } finally {
       setLoading(false);
     }
@@ -59,6 +172,8 @@ export default function HomePage({ onSelectStory }: Props) {
     const desc = newDesc.trim();
     const s = await createStory(title, desc);
     setStories((prev) => [s, ...prev]);
+    setStoryCharFlags((prev) => ({ ...prev, [s.id]: !!s.has_character_profiles }));
+    setStoryRefFlags((prev) => ({ ...prev, [s.id]: !!s.has_ref_image }));
     setShowNew(false);
     setNewTitle('');
     setNewDesc('');
@@ -302,6 +417,34 @@ export default function HomePage({ onSelectStory }: Props) {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
+                              openCharModal(s.id);
+                            }}
+                            className={`p-1.5 transition-colors rounded ${
+                              storyCharFlags[s.id]
+                                ? 'text-emerald-400 hover:text-emerald-300'
+                                : 'text-gray-600 hover:text-gray-300'
+                            }`}
+                            title={storyCharFlags[s.id] ? '角色卡（已设定）' : '设置角色卡'}
+                          >
+                            <Users size={13} />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openRefModal(s.id);
+                            }}
+                            className={`p-1.5 transition-colors rounded ${
+                              storyRefFlags[s.id]
+                                ? 'text-amber-400 hover:text-amber-300'
+                                : 'text-gray-600 hover:text-gray-300'
+                            }`}
+                            title={storyRefFlags[s.id] ? '默认垫图（已设定）' : '设置默认垫图'}
+                          >
+                            <ImagePlus size={13} />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
                               startEdit(s);
                             }}
                             className="p-1.5 text-gray-600 hover:text-gray-300 transition-colors rounded"
@@ -337,6 +480,160 @@ export default function HomePage({ onSelectStory }: Props) {
           </div>
         )}
       </main>
+
+      {/* Character card modal */}
+      {charModalStoryId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4">
+          <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg max-h-[calc(100vh-24px)] sm:max-h-[calc(100vh-32px)] shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <Users size={16} className="text-violet-400" />
+                全局角色外貌卡
+              </h3>
+              <button
+                onClick={() => setCharModalStoryId(null)}
+                className="p-1 text-gray-500 hover:text-gray-300 transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="px-5 py-4 overflow-y-auto">
+              {charModalLoading ? (
+                <div className="flex items-center justify-center py-12 text-gray-500">
+                  <Loader2 size={24} className="animate-spin" />
+                </div>
+              ) : (
+                <>
+                  <p className="text-xs text-gray-500 mb-3">
+                    在此设定角色外貌，所有章节默认继承。章节内也可单独覆盖。
+                  </p>
+                  <textarea
+                    value={charModalText}
+                    onChange={(e) => setCharModalText(e.target.value)}
+                    className="w-full bg-gray-800 text-sm text-gray-200 rounded-lg p-3 resize-none outline-none
+                               border border-gray-700 focus:border-violet-500 leading-relaxed"
+                    rows={10}
+                    placeholder={`角色名：塞蕾娜\n性别：女\n发色与发型：银灰色长发…\n\n角色名：艾伦\n性别：男\n…`}
+                    autoFocus
+                  />
+                </>)
+              }
+            </div>
+            <div className="flex justify-end gap-2 px-5 py-3 border-t border-gray-800">
+              <button
+                onClick={() => setCharModalStoryId(null)}
+                className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={saveCharModal}
+                disabled={charModalSaving || charModalLoading}
+                className="px-5 py-2 bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium
+                           rounded-lg transition-colors disabled:opacity-40"
+              >
+                {charModalSaving ? '保存中…' : '保存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ref image modal */}
+      {refModalStoryId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4">
+          <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md shadow-2xl flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <ImagePlus size={16} className="text-amber-400" />
+                全局默认垫图
+              </h3>
+              <button
+                onClick={() => setRefModalStoryId(null)}
+                className="p-1 text-gray-500 hover:text-gray-300 transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="px-5 py-4">
+              {refModalLoading ? (
+                <div className="flex items-center justify-center py-12 text-gray-500">
+                  <Loader2 size={24} className="animate-spin" />
+                </div>
+              ) : refModalHasImage ? (
+                <div className="space-y-3">
+                  <p className="text-xs text-gray-500">
+                    已设定默认垫图，所有章节默认继承，用作人物外貌和画面参考。章节内也可单独覆盖。
+                  </p>
+                  <div className="relative rounded-lg overflow-hidden border border-gray-700">
+                    <img
+                      src={`${storyRefImageUrl(refModalStoryId)}?t=${Date.now()}`}
+                      alt="默认垫图"
+                      className="w-full max-h-64 object-contain bg-gray-800"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => refModalFileRef.current?.click()}
+                      disabled={refModalUploading}
+                      className="flex-1 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium
+                                 rounded-lg transition-colors disabled:opacity-40"
+                    >
+                      {refModalUploading ? '上传中…' : '更换垫图'}
+                    </button>
+                    <button
+                      onClick={handleRefDelete}
+                      className="px-4 py-2 text-red-400 hover:text-red-300 hover:bg-red-900/20 text-sm font-medium
+                                 rounded-lg transition-colors"
+                    >
+                      删除
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-xs text-gray-500">
+                    设定默认垫图后，所有章节生成漫画时将使用此图作为人物外貌和画面参考。章节内也可单独覆盖。
+                  </p>
+                  <button
+                    onClick={() => refModalFileRef.current?.click()}
+                    disabled={refModalUploading}
+                    className="w-full flex flex-col items-center justify-center py-10 border-2 border-dashed border-gray-700
+                               hover:border-amber-500/50 rounded-lg text-gray-500 hover:text-gray-400 transition-colors
+                               disabled:opacity-40 cursor-pointer"
+                  >
+                    {refModalUploading ? (
+                      <Loader2 size={28} className="animate-spin mb-2" />
+                    ) : (
+                      <ImagePlus size={28} className="mb-2" />
+                    )}
+                    <span className="text-sm">{refModalUploading ? '上传中…' : '点击上传垫图'}</span>
+                  </button>
+                </div>
+              )}
+              <input
+                ref={refModalFileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleRefUpload(file);
+                  e.target.value = '';
+                }}
+              />
+            </div>
+            <div className="flex justify-end px-5 py-3 border-t border-gray-800">
+              <button
+                onClick={() => setRefModalStoryId(null)}
+                className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

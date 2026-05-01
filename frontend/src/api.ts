@@ -13,6 +13,8 @@ export interface Story {
   title: string;
   description?: string;
   cover_image?: string | null;
+  has_character_profiles?: boolean;
+  has_ref_image?: boolean;
   created_at: string;
 }
 
@@ -201,8 +203,8 @@ export async function generateNovel(chapterId: number): Promise<Chapter> {
 
 // ─── Scenes ─────────────────────────────────────────────────
 
-export async function generateScenes(chapterId: number): Promise<string[]> {
-  const res = await fetch(`${BASE}/api/chapters/${chapterId}/generate-scenes`, { method: 'POST', headers: apiHeaders() });
+export async function generateScenes(chapterId: number, signal?: AbortSignal): Promise<string[]> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/generate-scenes`, { method: 'POST', headers: apiHeaders(), signal });
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   return data.scenes;
@@ -226,11 +228,28 @@ export async function updateScenes(chapterId: number, scenes: string[]): Promise
 
 // ─── Character Profiles ─────────────────────────────────────
 
-export async function getCharacters(chapterId: number): Promise<string> {
-  const res = await fetch(`${BASE}/api/chapters/${chapterId}/characters`, { headers: apiHeaders() });
+// Story-level (global)
+export async function getStoryCharacters(storyId: number): Promise<string> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/characters`, { headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   return data.characters;
+}
+
+export async function saveStoryCharacters(storyId: number, characters: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/characters`, {
+    method: 'PUT',
+    headers: apiHeaders(true),
+    body: JSON.stringify({ characters }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+// Chapter-level (with source info)
+export async function getCharacters(chapterId: number): Promise<{ characters: string; source: 'chapter' | 'story' | 'none' }> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/characters`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return await res.json();
 }
 
 export async function saveCharacters(chapterId: number, characters: string): Promise<void> {
@@ -242,9 +261,48 @@ export async function saveCharacters(chapterId: number, characters: string): Pro
   if (!res.ok) throw new Error(await res.text());
 }
 
+export async function resetChapterCharacters(chapterId: number): Promise<void> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/characters`, {
+    method: 'DELETE',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
 // ─── Reference Image (垫图) ─────────────────────────────────
 
-export async function getRefImage(chapterId: number): Promise<{ has_ref: boolean; size_kb?: number }> {
+// Story-level ref image
+export async function getStoryRefImage(storyId: number): Promise<{ has_ref: boolean; size_kb?: number; image_path?: string }> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/ref-image`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function uploadStoryRefImage(storyId: number, base64: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/ref-image`, {
+    method: 'POST',
+    headers: apiHeaders(true),
+    body: JSON.stringify({ image: base64 }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export async function deleteStoryRefImage(storyId: number): Promise<void> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/ref-image`, { method: 'DELETE', headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export function storyRefImageUrl(storyIdOrPath: number | string): string {
+  const imagePath = typeof storyIdOrPath === 'number'
+    ? `manga_outputs/story_${storyIdOrPath}/ref_image.png`
+    : storyIdOrPath;
+  return `${BASE}/static/manga/${imagePath.replace('manga_outputs/', '')}`;
+}
+
+// Chapter-level ref image (with fallback info)
+export type RefSource = 'chapter' | 'story' | 'none';
+
+export async function getRefImage(chapterId: number): Promise<{ has_ref: boolean; source: RefSource; size_kb?: number }> {
   const res = await fetch(`${BASE}/api/chapters/${chapterId}/ref-image`, { headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -280,6 +338,26 @@ export async function setColorMode(chapterId: number, mode: ColorMode): Promise<
     method: 'PUT',
     headers: apiHeaders(true),
     body: JSON.stringify({ color_mode: mode }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+// ─── Image Count ─────────────────────────────────────────────
+
+export const ALLOWED_IMAGE_COUNTS = [4, 6, 8, 10, 12, 15, 20] as const;
+
+export async function getImageCount(chapterId: number): Promise<number> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/image-count`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data.image_count || 10;
+}
+
+export async function setImageCount(chapterId: number, count: number): Promise<void> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/image-count`, {
+    method: 'PUT',
+    headers: apiHeaders(true),
+    body: JSON.stringify({ image_count: count }),
   });
   if (!res.ok) throw new Error(await res.text());
 }

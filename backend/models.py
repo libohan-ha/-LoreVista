@@ -13,9 +13,14 @@ class Story(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="未命名故事")
     description: Mapped[str | None] = mapped_column(Text, nullable=True, default="")
     cover_image: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    character_profiles: Mapped[str | None] = mapped_column(Text, nullable=True, default="")
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
     chapters: Mapped[list["Chapter"]] = relationship("Chapter", back_populates="story", order_by="Chapter.chapter_number", cascade="all, delete-orphan")
+
+    @property
+    def has_character_profiles(self) -> bool:
+        return bool((self.character_profiles or "").strip())
 
 
 class Chapter(Base):
