@@ -1,4 +1,12 @@
 const BASE = '';
+const API_TOKEN = import.meta.env.VITE_API_TOKEN as string | undefined;
+
+function apiHeaders(json = false): HeadersInit {
+  return {
+    ...(json ? { 'Content-Type': 'application/json' } : {}),
+    ...(API_TOKEN ? { 'X-API-Token': API_TOKEN } : {}),
+  };
+}
 
 export interface Story {
   id: number;
@@ -40,7 +48,7 @@ export interface Chapter {
 export async function createStory(title: string = '未命名故事', description: string = ''): Promise<Story> {
   const res = await fetch(`${BASE}/api/stories`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders(true),
     body: JSON.stringify({ title, description }),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -48,7 +56,7 @@ export async function createStory(title: string = '未命名故事', description
 }
 
 export async function listStories(): Promise<Story[]> {
-  const res = await fetch(`${BASE}/api/stories`);
+  const res = await fetch(`${BASE}/api/stories`, { headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -56,7 +64,7 @@ export async function listStories(): Promise<Story[]> {
 export async function updateStory(storyId: number, data: { title?: string; description?: string }): Promise<Story> {
   const res = await fetch(`${BASE}/api/stories/${storyId}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders(true),
     body: JSON.stringify(data),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -64,14 +72,14 @@ export async function updateStory(storyId: number, data: { title?: string; descr
 }
 
 export async function deleteStory(storyId: number): Promise<void> {
-  const res = await fetch(`${BASE}/api/stories/${storyId}`, { method: 'DELETE' });
+  const res = await fetch(`${BASE}/api/stories/${storyId}`, { method: 'DELETE', headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
 }
 
 export async function uploadStoryCover(storyId: number, base64: string): Promise<string> {
   const res = await fetch(`${BASE}/api/stories/${storyId}/upload-cover`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders(true),
     body: JSON.stringify({ image: base64 }),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -87,25 +95,25 @@ export function coverImageUrl(coverPath: string | null | undefined): string | nu
 // ─── Chapter ────────────────────────────────────────────────
 
 export async function getChapter(chapterId: number): Promise<Chapter> {
-  const res = await fetch(`${BASE}/api/chapters/${chapterId}`);
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}`, { headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function listChapters(storyId: number): Promise<Chapter[]> {
-  const res = await fetch(`${BASE}/api/stories/${storyId}/chapters`);
+  const res = await fetch(`${BASE}/api/stories/${storyId}/chapters`, { headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function createNextChapter(storyId: number): Promise<Chapter> {
-  const res = await fetch(`${BASE}/api/stories/${storyId}/chapters`, { method: 'POST' });
+  const res = await fetch(`${BASE}/api/stories/${storyId}/chapters`, { method: 'POST', headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function deleteChapter(chapterId: number): Promise<void> {
-  const res = await fetch(`${BASE}/api/chapters/${chapterId}`, { method: 'DELETE' });
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}`, { method: 'DELETE', headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
 }
 
@@ -122,7 +130,7 @@ export function chatStream(
 
   fetch(`${BASE}/api/chapters/${chapterId}/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders(true),
     body: JSON.stringify({ content }),
     signal: controller.signal,
   })
@@ -185,6 +193,7 @@ export function chatStream(
 export async function generateNovel(chapterId: number): Promise<Chapter> {
   const res = await fetch(`${BASE}/api/chapters/${chapterId}/generate-novel`, {
     method: 'POST',
+    headers: apiHeaders(),
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
@@ -193,14 +202,14 @@ export async function generateNovel(chapterId: number): Promise<Chapter> {
 // ─── Scenes ─────────────────────────────────────────────────
 
 export async function generateScenes(chapterId: number): Promise<string[]> {
-  const res = await fetch(`${BASE}/api/chapters/${chapterId}/generate-scenes`, { method: 'POST' });
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/generate-scenes`, { method: 'POST', headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   return data.scenes;
 }
 
 export async function getScenes(chapterId: number): Promise<string[]> {
-  const res = await fetch(`${BASE}/api/chapters/${chapterId}/scenes`);
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/scenes`, { headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   return data.scenes;
@@ -209,20 +218,16 @@ export async function getScenes(chapterId: number): Promise<string[]> {
 export async function updateScenes(chapterId: number, scenes: string[]): Promise<void> {
   const res = await fetch(`${BASE}/api/chapters/${chapterId}/scenes`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders(true),
     body: JSON.stringify({ scenes }),
   });
   if (!res.ok) throw new Error(await res.text());
 }
 
-export function downloadImagesUrl(chapterId: number): string {
-  return `${BASE}/api/chapters/${chapterId}/download-images`;
-}
-
 // ─── Character Profiles ─────────────────────────────────────
 
 export async function getCharacters(chapterId: number): Promise<string> {
-  const res = await fetch(`${BASE}/api/chapters/${chapterId}/characters`);
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/characters`, { headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   return data.characters;
@@ -231,7 +236,7 @@ export async function getCharacters(chapterId: number): Promise<string> {
 export async function saveCharacters(chapterId: number, characters: string): Promise<void> {
   const res = await fetch(`${BASE}/api/chapters/${chapterId}/characters`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders(true),
     body: JSON.stringify({ characters }),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -240,7 +245,7 @@ export async function saveCharacters(chapterId: number, characters: string): Pro
 // ─── Reference Image (垫图) ─────────────────────────────────
 
 export async function getRefImage(chapterId: number): Promise<{ has_ref: boolean; size_kb?: number }> {
-  const res = await fetch(`${BASE}/api/chapters/${chapterId}/ref-image`);
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/ref-image`, { headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -248,14 +253,14 @@ export async function getRefImage(chapterId: number): Promise<{ has_ref: boolean
 export async function uploadRefImage(chapterId: number, base64: string): Promise<void> {
   const res = await fetch(`${BASE}/api/chapters/${chapterId}/ref-image`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders(true),
     body: JSON.stringify({ image: base64 }),
   });
   if (!res.ok) throw new Error(await res.text());
 }
 
 export async function deleteRefImage(chapterId: number): Promise<void> {
-  const res = await fetch(`${BASE}/api/chapters/${chapterId}/ref-image`, { method: 'DELETE' });
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/ref-image`, { method: 'DELETE', headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
 }
 
@@ -264,7 +269,7 @@ export async function deleteRefImage(chapterId: number): Promise<void> {
 export type ColorMode = 'bw' | 'color';
 
 export async function getColorMode(chapterId: number): Promise<ColorMode> {
-  const res = await fetch(`${BASE}/api/chapters/${chapterId}/color-mode`);
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/color-mode`, { headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   return data.color_mode || 'bw';
@@ -273,7 +278,7 @@ export async function getColorMode(chapterId: number): Promise<ColorMode> {
 export async function setColorMode(chapterId: number, mode: ColorMode): Promise<void> {
   const res = await fetch(`${BASE}/api/chapters/${chapterId}/color-mode`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders(true),
     body: JSON.stringify({ color_mode: mode }),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -286,7 +291,7 @@ export async function regenerateImage(
 ): Promise<{ id: number; image_number: number; image_path: string; prompt: string }> {
   const res = await fetch(`${BASE}/api/chapters/${chapterId}/regenerate-image/${imageNumber}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: apiHeaders(true),
     body: JSON.stringify({ prompt }),
   });
   if (!res.ok) throw new Error(await res.text());
@@ -308,6 +313,7 @@ export function generateMangaStream(
 
   fetch(`${BASE}/api/chapters/${chapterId}/generate-manga-stream`, {
     method: 'POST',
+    headers: apiHeaders(),
     signal: controller.signal,
   })
     .then(async (res) => {
@@ -359,8 +365,9 @@ export function generateMangaStream(
   return controller;
 }
 
-export function mangaImageUrl(imagePath: string): string {
+export function mangaImageUrl(imagePath: string, cacheBust?: number): string {
   // imagePath is like "manga_outputs/chapter_1/panel_01_abc12345.png"
   // Served at /static/manga/chapter_1/panel_01_abc12345.png
-  return `${BASE}/static/manga/${imagePath.replace('manga_outputs/', '')}`;
+  const url = `${BASE}/static/manga/${imagePath.replace('manga_outputs/', '')}`;
+  return cacheBust ? `${url}?t=${cacheBust}` : url;
 }

@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home } from 'lucide-react';
 import ChatPanel from './components/ChatPanel';
 import MangaPanel from './components/MangaPanel';
 import HomePage from './components/HomePage';
 import {
   listChapters,
+  listStories,
   createNextChapter,
   deleteChapter,
   getChapter,
@@ -13,6 +14,9 @@ import {
 } from './api';
 
 type View = 'home' | 'editor';
+
+const LS_STORY_ID = 'lorevista.currentStoryId';
+const LS_CHAPTER_IDX = 'lorevista.currentChapterIdx';
 
 function App() {
   const [view, setView] = useState<View>('home');
@@ -24,10 +28,44 @@ function App() {
     _setCurrentIdx((prev) => {
       const next = typeof idx === 'function' ? idx(prev) : idx;
       window.location.hash = String(next);
+      localStorage.setItem(LS_CHAPTER_IDX, String(next));
       return next;
     });
   };
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // ─── Restore session from localStorage on mount ─────────
+  useEffect(() => {
+    const savedStoryId = localStorage.getItem(LS_STORY_ID);
+    if (!savedStoryId) {
+      setLoading(false);
+      return;
+    }
+    (async () => {
+      try {
+        const stories = await listStories();
+        const s = stories.find((x) => x.id === Number(savedStoryId));
+        if (!s) {
+          localStorage.removeItem(LS_STORY_ID);
+          localStorage.removeItem(LS_CHAPTER_IDX);
+          setLoading(false);
+          return;
+        }
+        const chs = await listChapters(s.id);
+        const savedIdx = Number(localStorage.getItem(LS_CHAPTER_IDX) ?? '0');
+        const idx = Math.max(0, Math.min(savedIdx, chs.length - 1));
+        setStory(s);
+        setChapters(chs);
+        _setCurrentIdx(idx);
+        window.location.hash = String(idx);
+        setView('editor');
+      } catch (err) {
+        console.error('Failed to restore session:', err);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
 
   const currentChapter = chapters[currentIdx] ?? null;
 
@@ -35,6 +73,7 @@ function App() {
     setLoading(true);
     try {
       setStory(s);
+      localStorage.setItem(LS_STORY_ID, String(s.id));
       const chs = await listChapters(s.id);
       setChapters(chs);
       setCurrentIdx(0);
@@ -52,6 +91,8 @@ function App() {
     setChapters([]);
     _setCurrentIdx(0);
     window.location.hash = '';
+    localStorage.removeItem(LS_STORY_ID);
+    localStorage.removeItem(LS_CHAPTER_IDX);
   };
 
   const refreshCurrentChapter = async () => {
@@ -102,11 +143,6 @@ function App() {
     }
   };
 
-  // ─── Home page ─────────────────────────────────────────
-  if (view === 'home') {
-    return <HomePage onSelectStory={enterStory} />;
-  }
-
   // ─── Loading ───────────────────────────────────────────
   if (loading) {
     return (
@@ -117,6 +153,11 @@ function App() {
         </div>
       </div>
     );
+  }
+
+  // ─── Home page ─────────────────────────────────────────
+  if (view === 'home') {
+    return <HomePage onSelectStory={enterStory} />;
   }
 
   // ─── Editor view ───────────────────────────────────────

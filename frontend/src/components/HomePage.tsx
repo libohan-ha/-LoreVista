@@ -94,13 +94,23 @@ export default function HomePage({ onSelectStory }: Props) {
   const handleCoverFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || uploadingCover === null) return;
+    const storyId = uploadingCover;
     const reader = new FileReader();
     reader.onload = async () => {
-      const b64 = (reader.result as string).split(',')[1];
-      const coverPath = await uploadStoryCover(uploadingCover, b64);
-      setStories((prev) =>
-        prev.map((s) => (s.id === uploadingCover ? { ...s, cover_image: coverPath } : s)),
-      );
+      try {
+        const b64 = (reader.result as string).split(',')[1];
+        const coverPath = await uploadStoryCover(storyId, b64);
+        setStories((prev) =>
+          prev.map((s) => (s.id === storyId ? { ...s, cover_image: coverPath } : s)),
+        );
+      } catch (err: any) {
+        alert(`上传封面失败: ${err.message}`);
+      } finally {
+        setUploadingCover(null);
+      }
+    };
+    reader.onerror = () => {
+      alert('读取封面文件失败');
       setUploadingCover(null);
     };
     reader.readAsDataURL(file);

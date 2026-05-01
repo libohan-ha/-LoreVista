@@ -173,7 +173,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
       // Update in images list
       const newItem: ImageItem = {
         image_number: result.image_number,
-        image_path: result.image_path + '?t=' + Date.now(),
+        image_path: result.image_path,
         prompt: result.prompt,
       };
       setImages((prev) => {
@@ -624,7 +624,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                   onClick={() => setLightboxIdx(idx)}
                 >
                   <img
-                    src={mangaImageUrl(img.image_path)}
+                    src={mangaImageUrl(img.image_path, isRegenerating ? Date.now() : undefined)}
                     alt={`Panel ${img.image_number}`}
                     className={`w-full object-contain ${isRegenerating ? 'opacity-30' : ''}`}
                     loading="lazy"
@@ -693,9 +693,9 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
         </div>
 
         {/* Loading placeholders */}
-        {generating && images.length < 10 && (
+        {generating && displayImages.length < 10 && (
           <div className="mt-6 space-y-6">
-            {Array.from({ length: 10 - images.length }, (_, i) => (
+            {Array.from({ length: 10 - displayImages.length }, (_, i) => (
               <div
                 key={`placeholder-${i}`}
                 className="rounded-xl border border-gray-800 bg-gray-900/50 h-64 flex items-center justify-center"

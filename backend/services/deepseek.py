@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from typing import AsyncGenerator
 
 import httpx
@@ -156,7 +157,8 @@ async def split_scenes(chat_messages: list[dict], character_profiles: str = "") 
         data = resp.json()
         raw = data["choices"][0]["message"]["content"]
 
-    # Extract JSON array from response
+    # Extract JSON array from response. LLMs sometimes wrap valid JSON in prose
+    # or fenced code blocks despite the instruction to output JSON only.
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
@@ -164,7 +166,15 @@ async def split_scenes(chat_messages: list[dict], character_profiles: str = "") 
             raw = raw[:-3]
         raw = raw.strip()
 
-    scenes: list[str] = json.loads(raw)
+    try:
+        scenes = json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r"\[[\s\S]*\]", raw)
+        if not match:
+            raise
+        scenes = json.loads(match.group(0))
+    if not isinstance(scenes, list) or not all(isinstance(scene, str) for scene in scenes):
+        raise ValueError("Scene split response must be a JSON array of strings")
     if len(scenes) != 10:
         raise ValueError(f"Expected 10 scenes, got {len(scenes)}")
     return scenes

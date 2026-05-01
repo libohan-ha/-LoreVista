@@ -1,11 +1,13 @@
 import asyncio
 import json
+import logging
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
@@ -26,12 +28,23 @@ from services.image2 import generate_manga_image
 
 load_dotenv()
 
+logger = logging.getLogger("main")
+
 app = FastAPI(title="Novel & Manga Generator")
+
+DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
+    if origin.strip()
+]
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+API_TOKEN = os.getenv("API_TOKEN", "").strip()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -40,6 +53,57 @@ app.add_middleware(
 manga_dir = Path(__file__).resolve().parent / "manga_outputs"
 manga_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/static/manga", StaticFiles(directory=str(manga_dir)), name="manga")
+
+
+@app.middleware("http")
+async def require_api_token(request: Request, call_next):
+    if API_TOKEN and request.url.path.startswith("/api") and request.method != "OPTIONS":
+        supplied = request.headers.get("x-api-token", "")
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            supplied = auth[7:].strip()
+        if supplied != API_TOKEN:
+            return JSONResponse({"detail": "Invalid or missing API token"}, status_code=401)
+    return await call_next(request)
+
+
+def _require_chapter(chapter_id: int, db: Session) -> Chapter:
+    chapter = db.get(Chapter, chapter_id)
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+    return chapter
+
+
+def _decode_png_upload(b64: str) -> bytes:
+    if not b64:
+        raise HTTPException(400, "No image provided")
+    if "," in b64 and b64.lstrip().startswith("data:"):
+        b64 = b64.split(",", 1)[1]
+    try:
+        import base64
+        import binascii
+        import io
+
+        from PIL import Image, UnidentifiedImageError
+
+        img_bytes = base64.b64decode(b64, validate=True)
+        if len(img_bytes) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, f"Image is too large. Max size is {MAX_UPLOAD_BYTES // (1024 * 1024)}MB")
+        with Image.open(io.BytesIO(img_bytes)) as img:
+            img.verify()
+        with Image.open(io.BytesIO(img_bytes)) as img:
+            output = io.BytesIO()
+            img.convert("RGBA").save(output, format="PNG", optimize=True)
+            png_bytes = output.getvalue()
+        if len(png_bytes) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, f"Image is too large after processing. Max size is {MAX_UPLOAD_BYTES // (1024 * 1024)}MB")
+        return png_bytes
+    except HTTPException:
+        raise
+    except (binascii.Error, ValueError):
+        raise HTTPException(400, "Invalid base64 image data")
+    except UnidentifiedImageError:
+        raise HTTPException(400, "Uploaded file is not a valid image")
 
 
 @app.on_event("startup")
@@ -122,8 +186,6 @@ def delete_story(story_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-from fastapi import Request
-
 @app.post("/api/stories/{story_id}/upload-cover")
 async def upload_story_cover(story_id: int, request: Request, db: Session = Depends(get_db)):
     story = db.get(Story, story_id)
@@ -131,11 +193,8 @@ async def upload_story_cover(story_id: int, request: Request, db: Session = Depe
         raise HTTPException(404, "Story not found")
     body = await request.json()
     b64 = body.get("image", "")
-    if not b64:
-        raise HTTPException(400, "No image provided")
-    import base64
     import uuid
-    img_bytes = base64.b64decode(b64)
+    img_bytes = _decode_png_upload(b64)
     covers_dir = manga_dir / "covers"
     covers_dir.mkdir(parents=True, exist_ok=True)
     filename = f"cover_{story_id}_{uuid.uuid4().hex[:8]}.png"
@@ -293,12 +352,14 @@ def _load_characters(chapter_id: int) -> str:
 
 
 @app.get("/api/chapters/{chapter_id}/characters")
-async def get_characters(chapter_id: int):
+async def get_characters(chapter_id: int, db: Session = Depends(get_db)):
+    _require_chapter(chapter_id, db)
     return {"characters": _load_characters(chapter_id)}
 
 
 @app.put("/api/chapters/{chapter_id}/characters")
-async def save_characters(chapter_id: int, body: dict):
+async def save_characters(chapter_id: int, body: dict, db: Session = Depends(get_db)):
+    _require_chapter(chapter_id, db)
     text = body.get("characters", "").strip()
     p = _characters_path(chapter_id)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -313,21 +374,20 @@ def _ref_image_path(chapter_id: int) -> Path:
 
 
 @app.get("/api/chapters/{chapter_id}/ref-image")
-async def get_ref_image(chapter_id: int):
+async def get_ref_image(chapter_id: int, db: Session = Depends(get_db)):
+    _require_chapter(chapter_id, db)
     p = _ref_image_path(chapter_id)
     if p.exists():
-        return {"has_ref": True, "path": str(p), "size_kb": round(p.stat().st_size / 1024)}
+        return {"has_ref": True, "size_kb": round(p.stat().st_size / 1024)}
     return {"has_ref": False}
 
 
 @app.post("/api/chapters/{chapter_id}/ref-image")
-async def upload_ref_image(chapter_id: int, request: Request):
+async def upload_ref_image(chapter_id: int, request: Request, db: Session = Depends(get_db)):
+    _require_chapter(chapter_id, db)
     body = await request.json()
     b64 = body.get("image", "")
-    if not b64:
-        raise HTTPException(400, "No image provided")
-    import base64 as _b64
-    img_bytes = _b64.b64decode(b64)
+    img_bytes = _decode_png_upload(b64)
     p = _ref_image_path(chapter_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(img_bytes)
@@ -335,7 +395,8 @@ async def upload_ref_image(chapter_id: int, request: Request):
 
 
 @app.delete("/api/chapters/{chapter_id}/ref-image")
-async def delete_ref_image(chapter_id: int):
+async def delete_ref_image(chapter_id: int, db: Session = Depends(get_db)):
+    _require_chapter(chapter_id, db)
     p = _ref_image_path(chapter_id)
     if p.exists():
         p.unlink()
@@ -362,12 +423,14 @@ def _save_color_mode(chapter_id: int, mode: str):
 
 
 @app.get("/api/chapters/{chapter_id}/color-mode")
-async def get_color_mode(chapter_id: int):
+async def get_color_mode(chapter_id: int, db: Session = Depends(get_db)):
+    _require_chapter(chapter_id, db)
     return {"color_mode": _load_color_mode(chapter_id)}
 
 
 @app.put("/api/chapters/{chapter_id}/color-mode")
-async def set_color_mode(chapter_id: int, body: dict):
+async def set_color_mode(chapter_id: int, body: dict, db: Session = Depends(get_db)):
+    _require_chapter(chapter_id, db)
     mode = body.get("color_mode", "bw")
     if mode not in ("bw", "color"):
         raise HTTPException(400, "color_mode must be 'bw' or 'color'")
@@ -386,7 +449,7 @@ async def generate_manga_endpoint(chapter_id: int, db: Session = Depends(get_db)
         raise HTTPException(400, "No novel content to generate manga from. Generate novel first.")
 
     # Step 1: Split novel into 10 scene descriptions
-    scenes = await split_scenes(chapter.novel_content)
+    scenes = await split_scenes([{"role": "user", "content": chapter.novel_content}])
 
     # Step 2: Generate images for each scene (sequential to avoid rate limits)
     results: list[dict] = []
@@ -438,8 +501,9 @@ async def generate_scenes_endpoint(chapter_id: int, db: Session = Depends(get_db
 
 
 @app.get("/api/chapters/{chapter_id}/scenes")
-async def get_scenes_endpoint(chapter_id: int):
+async def get_scenes_endpoint(chapter_id: int, db: Session = Depends(get_db)):
     """Load saved scene prompts from file."""
+    _require_chapter(chapter_id, db)
     prompts_file = Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}" / "scenes.txt"
     if not prompts_file.exists():
         return {"scenes": []}
@@ -454,10 +518,11 @@ async def get_scenes_endpoint(chapter_id: int):
 
 
 @app.put("/api/chapters/{chapter_id}/scenes")
-async def update_scenes_endpoint(chapter_id: int, body: dict):
+async def update_scenes_endpoint(chapter_id: int, body: dict, db: Session = Depends(get_db)):
     """Save user-edited scene prompts."""
+    _require_chapter(chapter_id, db)
     scenes = body.get("scenes", [])
-    if len(scenes) != 10:
+    if not isinstance(scenes, list) or len(scenes) != 10 or not all(isinstance(s, str) and s.strip() for s in scenes):
         raise HTTPException(400, "Must provide exactly 10 scenes")
 
     prompts_dir = Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}"
@@ -552,36 +617,6 @@ async def generate_manga_stream(chapter_id: int, db: Session = Depends(get_db)):
     return EventSourceResponse(event_generator(), ping=10)
 
 
-# ─── Download all images as zip ──────────────────────────
-
-@app.get("/api/chapters/{chapter_id}/download-images")
-async def download_images(chapter_id: int, db: Session = Depends(get_db)):
-    chapter = db.get(Chapter, chapter_id)
-    if not chapter:
-        raise HTTPException(404, "Chapter not found")
-    if not chapter.images:
-        raise HTTPException(400, "No images to download")
-
-    import io
-    import zipfile
-    from fastapi.responses import StreamingResponse
-
-    buf = io.BytesIO()
-    chapter_dir = Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}"
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for img in sorted(chapter.images, key=lambda x: x.image_number):
-            img_path = Path(__file__).resolve().parent / img.image_path
-            if img_path.exists():
-                zf.write(img_path, f"panel_{img.image_number:02d}.png")
-    buf.seek(0)
-
-    return StreamingResponse(
-        buf,
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename=chapter_{chapter.chapter_number}_manga.zip"},
-    )
-
-
 # ─── Regenerate single image ─────────────────────────────
 
 @app.post("/api/chapters/{chapter_id}/regenerate-image/{image_number}")
@@ -613,32 +648,37 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
                 for idx, s in enumerate(parts, 1):
                     f.write(f"=== 第{idx}格 ===\n{s}\n\n")
 
-    # Delete old DB record for this image_number
+    # Keep old DB/file intact until the new image is generated successfully.
     old_img = db.query(MangaImage).filter(
         MangaImage.chapter_id == chapter_id,
         MangaImage.image_number == image_number,
     ).first()
-    if old_img:
-        # Delete old file
-        old_path = Path(__file__).resolve().parent / old_img.image_path
-        if old_path.exists():
-            old_path.unlink()
-        db.delete(old_img)
-        db.commit()
+    old_path = Path(__file__).resolve().parent / old_img.image_path if old_img else None
 
     # Generate new image
     ref_img = _ref_image_path(chapter_id)
     image_path = await generate_manga_image(prompt, chapter_id, image_number, all_scenes=all_scenes, character_profiles=_load_characters(chapter_id), ref_image_path=str(ref_img) if ref_img.exists() else None, color_mode=_load_color_mode(chapter_id))
 
-    manga = MangaImage(
-        chapter_id=chapter_id,
-        image_number=image_number,
-        image_path=image_path,
-        prompt=prompt,
-    )
-    db.add(manga)
+    if old_img:
+        manga = old_img
+        manga.image_path = image_path
+        manga.prompt = prompt
+    else:
+        manga = MangaImage(
+            chapter_id=chapter_id,
+            image_number=image_number,
+            image_path=image_path,
+            prompt=prompt,
+        )
+        db.add(manga)
     db.commit()
     db.refresh(manga)
+
+    if old_path and old_path.exists() and old_path != Path(__file__).resolve().parent / image_path:
+        try:
+            old_path.unlink()
+        except OSError as exc:
+            logger.warning("Failed to delete old regenerated image %s: %s", old_path, exc)
 
     return {
         "id": manga.id,
@@ -650,4 +690,9 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "main:app",
+        host=os.getenv("HOST", "127.0.0.1"),
+        port=int(os.getenv("PORT", "8000")),
+        reload=os.getenv("RELOAD", "true").lower() == "true",
+    )
