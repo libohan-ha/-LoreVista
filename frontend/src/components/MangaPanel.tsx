@@ -304,11 +304,11 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   return (
     <div className="flex flex-col h-full bg-gray-950">
       {/* Header */}
-      <div className="px-5 py-3 border-b border-gray-800 flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-gray-200 tracking-wide uppercase shrink-0">
+      <div className="px-3 md:px-5 py-3 border-b border-gray-800 flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-gray-200 tracking-wide uppercase shrink-0 hidden md:block">
           第 {chapter?.chapter_number ?? '–'} 话 · 漫画
         </h2>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 md:gap-2 flex-wrap justify-end">
           {/* 垫图 (Reference Image) */}
           <div className="flex items-center gap-1">
             <input
@@ -485,7 +485,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
       )}
 
       {/* Main content area */}
-      <div className="flex-1 overflow-y-auto px-5 py-4">
+      <div className="flex-1 overflow-y-auto px-3 md:px-5 py-4">
         {/* Character profiles card */}
         {(phase === 'idle' || phase === 'editing-scenes') && (
           <div className="mb-4 rounded-lg border border-gray-800 bg-gray-900/60 overflow-hidden">

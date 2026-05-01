@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home, MessageSquare, Image } from 'lucide-react';
 import ChatPanel from './components/ChatPanel';
 import MangaPanel from './components/MangaPanel';
 import HomePage from './components/HomePage';
@@ -14,15 +14,30 @@ import {
 } from './api';
 
 type View = 'home' | 'editor';
+type MobileTab = 'chat' | 'manga';
 
 const LS_STORY_ID = 'lorevista.currentStoryId';
 const LS_CHAPTER_IDX = 'lorevista.currentChapterIdx';
+const MOBILE_BREAKPOINT = 768;
+
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(window.innerWidth < MOBILE_BREAKPOINT);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+  return isMobile;
+}
 
 function App() {
+  const isMobile = useIsMobile();
   const [view, setView] = useState<View>('home');
   const [story, setStory] = useState<Story | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [currentIdx, _setCurrentIdx] = useState(0);
+  const [mobileTab, setMobileTab] = useState<MobileTab>('chat');
 
   const setCurrentIdx = (idx: number | ((prev: number) => number)) => {
     _setCurrentIdx((prev) => {
@@ -173,63 +188,106 @@ function App() {
   return (
     <div className="h-screen flex flex-col bg-gray-950 text-gray-100">
       {/* Top bar */}
-      <header className="h-12 border-b border-gray-800 flex items-center justify-between px-5 shrink-0 bg-gray-950/80 backdrop-blur-sm">
-        <div className="flex items-center gap-3">
+      <header className="h-12 border-b border-gray-800 flex items-center justify-between px-3 md:px-5 shrink-0 bg-gray-950/80 backdrop-blur-sm">
+        <div className="flex items-center gap-2 md:gap-3 min-w-0">
           <button
             onClick={goHome}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-gray-400 hover:text-white
-                       hover:bg-gray-800 rounded-lg transition-colors"
+            className="flex items-center gap-1 px-2 py-1.5 text-xs text-gray-400 hover:text-white
+                       hover:bg-gray-800 rounded-lg transition-colors shrink-0"
             title="返回首页"
           >
             <Home size={14} />
-            首页
+            {!isMobile && '首页'}
           </button>
-          <div className="w-px h-5 bg-gray-800" />
-          <BookOpenText size={16} className="text-violet-400" />
-          <span className="text-sm font-semibold tracking-wide truncate max-w-xs">
+          <div className="w-px h-5 bg-gray-800 shrink-0" />
+          <BookOpenText size={16} className="text-violet-400 shrink-0" />
+          <span className="text-sm font-semibold tracking-wide truncate max-w-[120px] md:max-w-xs">
             {story?.title ?? '小说漫画生成器'}
           </span>
         </div>
-        <div className="flex items-center gap-2 text-xs text-gray-500">
+        <div className="flex items-center gap-2 text-xs text-gray-500 shrink-0">
           <span>第 {currentChapter?.chapter_number ?? '–'} 话</span>
-          <span>·</span>
-          <span>共 {chapters.length} 话</span>
+          {!isMobile && <span>·</span>}
+          {!isMobile && <span>共 {chapters.length} 话</span>}
         </div>
       </header>
 
-      {/* Main content: left chat + right manga */}
-      <main className="flex-1 flex min-h-0">
-        <div className="w-1/2 border-r border-gray-800">
-          <ChatPanel chapter={currentChapter} onMessageSent={refreshCurrentChapter} />
+      {/* Mobile tab bar */}
+      {isMobile && (
+        <div className="flex border-b border-gray-800 shrink-0">
+          <button
+            onClick={() => setMobileTab('chat')}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors
+              ${mobileTab === 'chat'
+                ? 'text-violet-400 border-b-2 border-violet-400 bg-gray-900/50'
+                : 'text-gray-500 hover:text-gray-300'}`}
+          >
+            <MessageSquare size={14} />
+            对话
+          </button>
+          <button
+            onClick={() => setMobileTab('manga')}
+            className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-medium transition-colors
+              ${mobileTab === 'manga'
+                ? 'text-amber-400 border-b-2 border-amber-400 bg-gray-900/50'
+                : 'text-gray-500 hover:text-gray-300'}`}
+          >
+            <Image size={14} />
+            漫画
+          </button>
         </div>
-        <div className="w-1/2">
-          <MangaPanel chapter={currentChapter} onChapterRefresh={refreshChapter} />
-        </div>
-      </main>
+      )}
+
+      {/* Main content */}
+      {isMobile ? (
+        <main className="flex-1 min-h-0">
+          <div className={`h-full ${mobileTab === 'chat' ? '' : 'hidden'}`}>
+            <ChatPanel
+              chapter={currentChapter}
+              onMessageSent={refreshCurrentChapter}
+              onGoToManga={() => setMobileTab('manga')}
+            />
+          </div>
+          <div className={`h-full ${mobileTab === 'manga' ? '' : 'hidden'}`}>
+            <MangaPanel chapter={currentChapter} onChapterRefresh={refreshChapter} />
+          </div>
+        </main>
+      ) : (
+        <main className="flex-1 flex min-h-0">
+          <div className="w-1/2 border-r border-gray-800">
+            <ChatPanel chapter={currentChapter} onMessageSent={refreshCurrentChapter} />
+          </div>
+          <div className="w-1/2">
+            <MangaPanel chapter={currentChapter} onChapterRefresh={refreshChapter} />
+          </div>
+        </main>
+      )}
 
       {/* Bottom navigation */}
-      <footer className="h-14 border-t border-gray-800 flex items-center justify-center gap-4 shrink-0 bg-gray-950/80 backdrop-blur-sm">
+      <footer className="h-14 border-t border-gray-800 flex items-center justify-center gap-2 md:gap-4 shrink-0 bg-gray-950/80 backdrop-blur-sm px-2">
         <button
           onClick={handlePrev}
           disabled={currentIdx === 0}
-          className="flex items-center gap-1.5 px-5 py-2 text-sm font-medium rounded-lg
+          className="flex items-center gap-1 px-3 md:px-5 py-2 text-sm font-medium rounded-lg
                      bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-30
                      disabled:cursor-not-allowed transition-colors"
         >
           <ChevronLeft size={16} />
-          上一话
+          {!isMobile && '上一话'}
         </button>
 
-        <button
-          onClick={handleDelete}
-          disabled={!currentChapter}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg
-                     bg-red-900/50 hover:bg-red-800 text-red-300 disabled:opacity-30
-                     disabled:cursor-not-allowed transition-colors"
-          title="删除当前话"
-        >
-          <Trash2 size={14} />
-        </button>
+        {!isMobile && (
+          <button
+            onClick={handleDelete}
+            disabled={!currentChapter}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg
+                       bg-red-900/50 hover:bg-red-800 text-red-300 disabled:opacity-30
+                       disabled:cursor-not-allowed transition-colors"
+            title="删除当前话"
+          >
+            <Trash2 size={14} />
+          </button>
+        )}
 
         <div className="flex items-center gap-1 text-xs text-gray-600">
           {chapters.map((_, i) => (
@@ -246,18 +304,18 @@ function App() {
         <button
           onClick={handleNext}
           disabled={creatingChapter}
-          className="flex items-center gap-1.5 px-5 py-2 text-sm font-medium rounded-lg
+          className="flex items-center gap-1 px-3 md:px-5 py-2 text-sm font-medium rounded-lg
                      bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-40
                      disabled:cursor-not-allowed transition-colors"
         >
           {currentIdx === chapters.length - 1 ? (
             <>
               <Plus size={16} />
-              {creatingChapter ? '新建中…' : '下一话（新建）'}
+              {creatingChapter ? '新建…' : (isMobile ? '新建' : '下一话（新建）')}
             </>
           ) : (
             <>
-              下一话
+              {!isMobile && '下一话'}
               <ChevronRight size={16} />
             </>
           )}

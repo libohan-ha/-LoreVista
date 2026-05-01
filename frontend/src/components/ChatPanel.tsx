@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { Send } from 'lucide-react';
+import { Send, Image } from 'lucide-react';
 import { chatStream, type Chapter } from '../api';
 
 interface Props {
   chapter: Chapter | null;
   onMessageSent?: () => void;
+  onGoToManga?: () => void;
 }
 
-export default function ChatPanel({ chapter, onMessageSent }: Props) {
+export default function ChatPanel({ chapter, onMessageSent, onGoToManga }: Props) {
   const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -124,6 +125,20 @@ export default function ChatPanel({ chapter, onMessageSent }: Props) {
               {streamContent}
               <span className="inline-block w-1.5 h-4 ml-0.5 bg-violet-400 animate-pulse rounded-sm" />
             </div>
+          </div>
+        )}
+        {/* Mobile: Go to manga button */}
+        {onGoToManga && messages.length > 0 && !streaming && (
+          <div className="flex justify-center py-3">
+            <button
+              onClick={onGoToManga}
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg
+                         bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 border border-amber-700/50
+                         transition-colors"
+            >
+              <Image size={14} />
+              查看漫画 / 生成分镜
+            </button>
           </div>
         )}
         <div ref={messagesEndRef} />
