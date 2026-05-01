@@ -221,6 +221,8 @@ async def upload_story_cover(story_id: int, request: Request, db: Session = Depe
 
 @app.get("/api/stories/{story_id}/chapters", response_model=list[ChapterOut])
 def list_chapters(story_id: int, db: Session = Depends(get_db)):
+    if not db.get(Story, story_id):
+        raise HTTPException(404, "Story not found")
     return (
         db.query(Chapter)
         .filter(Chapter.story_id == story_id)
@@ -322,6 +324,11 @@ async def chat(chapter_id: int, body: ChatMessageIn, db: Session = Depends(get_d
             db.commit()
             yield {"event": "done", "data": json.dumps({"content": full_content}, ensure_ascii=False)}
         except Exception as e:
+            db.rollback()
+            persisted_user_msg = db.get(ChatMessage, user_msg.id)
+            if persisted_user_msg:
+                db.delete(persisted_user_msg)
+                db.commit()
             yield {"event": "error", "data": json.dumps({"error": str(e)}, ensure_ascii=False)}
 
     return EventSourceResponse(event_generator())

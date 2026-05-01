@@ -27,6 +27,19 @@ MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds
 
 
+def normalize_image_bytes(image_bytes: bytes) -> bytes:
+    """Validate image bytes and return normalized PNG bytes."""
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            img.verify()
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            output = io.BytesIO()
+            img.convert("RGBA").save(output, format="PNG", optimize=True)
+            return output.getvalue()
+    except Exception as exc:
+        raise RuntimeError("Generated image response is not a valid image") from exc
+
+
 async def generate_manga_image(prompt: str, chapter_id: int, image_number: int, all_scenes: list[str] | None = None, character_profiles: str = "", ref_image_path: str | None = None, color_mode: str = "bw") -> str:
     """Generate a single manga image and save it. Returns the relative file path."""
     # Detect if we'll use ref image (file must exist)
@@ -158,6 +171,9 @@ async def generate_manga_image(prompt: str, chapter_id: int, image_number: int, 
                 logger.info(f"[{image_number}/10] 下载完成，大小 {len(image_bytes)} bytes")
             else:
                 raise RuntimeError("No b64_json or url in image response")
+
+            image_bytes = normalize_image_bytes(image_bytes)
+            logger.info(f"[{image_number}/10] 图片验证通过，PNG 大小 {len(image_bytes)} bytes")
 
             # Save image
             chapter_dir = OUTPUT_DIR / f"chapter_{chapter_id}"
