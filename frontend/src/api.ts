@@ -146,6 +146,28 @@ export function chatStream(
       const decoder = new TextDecoder();
       let buffer = '';
       let currentEvent = 'message';
+      const handleLine = (line: string) => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith(':')) return;
+        if (trimmed.startsWith('event:')) {
+          currentEvent = trimmed.slice(6).trim();
+        } else if (trimmed.startsWith('data:')) {
+          const dataStr = trimmed.slice(5).trim();
+          try {
+            const data = JSON.parse(dataStr);
+            if (currentEvent === 'token' && data.content !== undefined) {
+              onToken(data.content);
+            } else if (currentEvent === 'done' && data.content !== undefined) {
+              _onDone(data.content);
+            } else if (currentEvent === 'error' || data.error) {
+              onError(data.error);
+            }
+          } catch {
+            // ignore
+          }
+          currentEvent = 'message';
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -155,28 +177,10 @@ export function chatStream(
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith(':')) continue;
-          if (trimmed.startsWith('event:')) {
-            currentEvent = trimmed.slice(6).trim();
-          } else if (trimmed.startsWith('data:')) {
-            const dataStr = trimmed.slice(5).trim();
-            try {
-              const data = JSON.parse(dataStr);
-              if (currentEvent === 'token' && data.content !== undefined) {
-                onToken(data.content);
-              } else if (currentEvent === 'done' && data.content !== undefined) {
-                _onDone(data.content);
-              } else if (currentEvent === 'error' || data.error) {
-                onError(data.error);
-              }
-            } catch {
-              // ignore
-            }
-            currentEvent = 'message';
-          }
+          handleLine(line);
         }
       }
+      if (buffer.trim()) handleLine(buffer);
 
       // If stream ended without a done event, call onDone with empty
       // This handles edge cases where connection closes unexpectedly
@@ -404,6 +408,23 @@ export function generateMangaStream(
       const decoder = new TextDecoder();
       let buffer = '';
       let currentEvent = 'message';
+      const handleLine = (line: string) => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith(':')) return;
+        if (trimmed.startsWith('event:')) {
+          currentEvent = trimmed.slice(6).trim();
+        } else if (trimmed.startsWith('data:')) {
+          const dataStr = trimmed.slice(5).trim();
+          try {
+            const data = JSON.parse(dataStr);
+            const eventType = currentEvent as MangaProgress['type'];
+            onEvent({ type: eventType, data });
+          } catch {
+            // ignore unparseable data
+          }
+          currentEvent = 'message';
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -413,26 +434,10 @@ export function generateMangaStream(
         buffer = lines.pop() || '';
 
         for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith(':')) {
-            // Empty line or SSE comment/ping — skip
-            continue;
-          }
-          if (trimmed.startsWith('event:')) {
-            currentEvent = trimmed.slice(6).trim();
-          } else if (trimmed.startsWith('data:')) {
-            const dataStr = trimmed.slice(5).trim();
-            try {
-              const data = JSON.parse(dataStr);
-              const eventType = currentEvent as MangaProgress['type'];
-              onEvent({ type: eventType, data });
-            } catch {
-              // ignore unparseable data
-            }
-            currentEvent = 'message'; // reset after consuming
-          }
+          handleLine(line);
         }
       }
+      if (buffer.trim()) handleLine(buffer);
     })
     .catch((err) => {
       if (err.name !== 'AbortError') {

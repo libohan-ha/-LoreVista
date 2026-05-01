@@ -278,7 +278,8 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     setErrorMsg('');
 
     const targetId = chapter.id;
-    genStore.start(targetId, imageCount);
+    const targetTotal = imageCount;
+    genStore.start(targetId, targetTotal);
 
     const controller = generateMangaStream(targetId, (event: MangaProgress) => {
       switch (event.type) {
@@ -298,6 +299,12 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             image_path: event.data.image_path,
             prompt: event.data.prompt,
           });
+          if (event.data.image_number >= targetTotal) {
+            mangaAbortRef.current.delete(targetId);
+            genStore.finish(targetId);
+            onChapterRefresh?.(targetId);
+            setTimeout(() => genStore.clear(targetId), 800);
+          }
           break;
         case 'done':
           mangaAbortRef.current.delete(targetId);

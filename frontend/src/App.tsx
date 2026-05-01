@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home, MessageSquare, Image } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home, MessageSquare, Image, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import ChatPanel from './components/ChatPanel';
 import MangaPanel from './components/MangaPanel';
 import HomePage from './components/HomePage';
@@ -17,8 +17,19 @@ type View = 'home' | 'editor';
 type MobileTab = 'chat' | 'manga';
 
 const LS_STORY_ID = 'lorevista.currentStoryId';
+const LS_CHAPTER_ID = 'lorevista.currentChapterId';
 const LS_CHAPTER_IDX = 'lorevista.currentChapterIdx';
 const MOBILE_BREAKPOINT = 768;
+
+function chapterHash(chapterNumber: number) {
+  return `chapter-${chapterNumber}`;
+}
+
+function parseChapterNumberHash(): number | null {
+  const raw = window.location.hash.replace(/^#/, '');
+  const match = raw.match(/^chapter-(\d+)$/);
+  return match ? Number(match[1]) : null;
+}
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < MOBILE_BREAKPOINT);
@@ -38,14 +49,27 @@ function App() {
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [currentIdx, _setCurrentIdx] = useState(0);
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat');
+  const [chapterNavOpen, setChapterNavOpen] = useState(true);
 
-  const setCurrentIdx = (idx: number | ((prev: number) => number)) => {
+  const persistSelectedChapter = (chapter: Chapter | null | undefined) => {
+    if (!chapter) return;
+    window.location.hash = chapterHash(chapter.chapter_number);
+    localStorage.setItem(LS_CHAPTER_ID, String(chapter.id));
+    localStorage.removeItem(LS_CHAPTER_IDX);
+  };
+
+  const setCurrentIdx = (idx: number | ((prev: number) => number), sourceChapters = chapters) => {
     _setCurrentIdx((prev) => {
-      const next = typeof idx === 'function' ? idx(prev) : idx;
-      window.location.hash = String(next);
-      localStorage.setItem(LS_CHAPTER_IDX, String(next));
+      const rawNext = typeof idx === 'function' ? idx(prev) : idx;
+      const next = Math.max(0, Math.min(rawNext, sourceChapters.length - 1));
+      persistSelectedChapter(sourceChapters[next]);
       return next;
     });
+  };
+
+  const selectChapterNumber = (chapterNumber: number, sourceChapters = chapters) => {
+    const idx = sourceChapters.findIndex((c) => c.chapter_number === chapterNumber);
+    if (idx >= 0) setCurrentIdx(idx, sourceChapters);
   };
   const [loading, setLoading] = useState(true);
   const [creatingChapter, setCreatingChapter] = useState(false);
@@ -63,17 +87,24 @@ function App() {
         const s = stories.find((x) => x.id === Number(savedStoryId));
         if (!s) {
           localStorage.removeItem(LS_STORY_ID);
+          localStorage.removeItem(LS_CHAPTER_ID);
           localStorage.removeItem(LS_CHAPTER_IDX);
           setLoading(false);
           return;
         }
         const chs = await listChapters(s.id);
-        const idx = Math.max(0, chs.length - 1);
+        const hashChapterNumber = parseChapterNumberHash();
+        const savedChapterId = Number(localStorage.getItem(LS_CHAPTER_ID) || '');
+        const preferredIdx = hashChapterNumber
+          ? chs.findIndex((c) => c.chapter_number === hashChapterNumber)
+          : savedChapterId
+            ? chs.findIndex((c) => c.id === savedChapterId)
+          : -1;
+        const idx = preferredIdx >= 0 ? preferredIdx : Math.max(0, chs.length - 1);
         setStory(s);
         setChapters(chs);
         _setCurrentIdx(idx);
-        window.location.hash = String(idx);
-        localStorage.setItem(LS_CHAPTER_IDX, String(idx));
+        persistSelectedChapter(chs[idx]);
         setView('editor');
       } catch (err) {
         console.error('Failed to restore session:', err);
@@ -92,7 +123,7 @@ function App() {
       localStorage.setItem(LS_STORY_ID, String(s.id));
       const chs = await listChapters(s.id);
       setChapters(chs);
-      setCurrentIdx(Math.max(0, chs.length - 1));
+      setCurrentIdx(Math.max(0, chs.length - 1), chs);
       setView('editor');
     } catch (err) {
       console.error('Failed to load story:', err);
@@ -108,6 +139,7 @@ function App() {
     _setCurrentIdx(0);
     window.location.hash = '';
     localStorage.removeItem(LS_STORY_ID);
+    localStorage.removeItem(LS_CHAPTER_ID);
     localStorage.removeItem(LS_CHAPTER_IDX);
   };
 
@@ -138,8 +170,9 @@ function App() {
       setCreatingChapter(true);
       try {
         const newCh = await createNextChapter(story.id);
-        setChapters((prev) => [...prev, newCh]);
-        setCurrentIdx(chapters.length);
+        const nextChapters = [...chapters, newCh];
+        setChapters(nextChapters);
+        setCurrentIdx(nextChapters.length - 1, nextChapters);
       } catch (err: any) {
         alert(`创建下一话失败: ${err.message}`);
       } finally {
@@ -157,15 +190,61 @@ function App() {
       if (remaining.length === 0 && story) {
         const newCh = await createNextChapter(story.id);
         setChapters([newCh]);
-        setCurrentIdx(0);
+        setCurrentIdx(0, [newCh]);
       } else {
         setChapters(remaining);
-        setCurrentIdx(Math.min(currentIdx, remaining.length - 1));
+        setCurrentIdx(Math.min(currentIdx, remaining.length - 1), remaining);
       }
     } catch (err: any) {
       alert(`删除失败: ${err.message}`);
     }
   };
+
+  useEffect(() => {
+    if (view !== 'editor') return;
+    const onHashChange = () => {
+      const chapterNumber = parseChapterNumberHash();
+      if (chapterNumber) selectChapterNumber(chapterNumber);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, [view, chapters]);
+
+  const chapterNav = (
+    <aside
+      className={`${
+        chapterNavOpen ? 'w-64' : 'w-0'
+      } hidden md:flex shrink-0 overflow-hidden border-r border-gray-800 bg-gray-950/95 transition-[width] duration-200`}
+    >
+      <div className="flex w-64 flex-col">
+        <div className="flex h-11 items-center justify-between border-b border-gray-800 px-3">
+          <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">目录</span>
+          <span className="text-[11px] text-gray-600">{chapters.length} 话</span>
+        </div>
+        <div className="flex-1 overflow-y-auto p-2">
+          {chapters.map((chapter, idx) => {
+            const active = chapter.id === currentChapter?.id;
+            return (
+              <button
+                key={chapter.id}
+                onClick={() => setCurrentIdx(idx)}
+                className={`mb-1 w-full rounded-lg px-3 py-2 text-left transition-colors ${
+                  active
+                    ? 'bg-violet-600/20 text-violet-200 border border-violet-700/50'
+                    : 'text-gray-400 hover:bg-gray-900 hover:text-gray-200 border border-transparent'
+                }`}
+              >
+                <div className="text-xs font-medium">第 {chapter.chapter_number} 话</div>
+                <div className="mt-0.5 truncate text-[11px] text-gray-600">
+                  {chapter.novel_content ? '已有正文' : chapter.messages.length ? '创作中' : '未开始'}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </aside>
+  );
 
   // ─── Loading ───────────────────────────────────────────
   if (loading) {
@@ -200,6 +279,15 @@ function App() {
             {!isMobile && '首页'}
           </button>
           <div className="w-px h-5 bg-gray-800 shrink-0" />
+          <button
+            onClick={() => setChapterNavOpen((open) => !open)}
+            className="hidden md:flex items-center justify-center w-8 h-8 text-gray-500 hover:text-white
+                       hover:bg-gray-800 rounded-lg transition-colors shrink-0"
+            title={chapterNavOpen ? '收起目录' : '展开目录'}
+            aria-label={chapterNavOpen ? '收起目录' : '展开目录'}
+          >
+            {chapterNavOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+          </button>
           <BookOpenText size={16} className="text-violet-400 shrink-0" />
           <span className="text-sm font-semibold tracking-wide truncate max-w-[120px] md:max-w-xs">
             {story?.title ?? '小说漫画生成器'}
@@ -238,6 +326,24 @@ function App() {
         </div>
       )}
 
+      {isMobile && chapters.length > 0 && (
+        <div className="flex gap-1 overflow-x-auto border-b border-gray-800 bg-gray-950 px-2 py-2 shrink-0">
+          {chapters.map((chapter, idx) => (
+            <button
+              key={chapter.id}
+              onClick={() => setCurrentIdx(idx)}
+              className={`shrink-0 rounded-full border px-3 py-1.5 text-xs transition-colors ${
+                chapter.id === currentChapter?.id
+                  ? 'border-violet-500 bg-violet-600/20 text-violet-200'
+                  : 'border-gray-800 bg-gray-900 text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              第 {chapter.chapter_number} 话
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Main content */}
       {isMobile ? (
         <main className="flex-1 min-h-0">
@@ -255,11 +361,14 @@ function App() {
         </main>
       ) : (
         <main className="flex-1 flex min-h-0">
-          <div className="w-1/2 border-r border-gray-800">
-            <ChatPanel chapter={currentChapter} onMessageSent={refreshCurrentChapter} onChapterRefresh={refreshChapter} />
-          </div>
-          <div className="w-1/2">
-            <MangaPanel chapter={currentChapter} onChapterRefresh={refreshChapter} />
+          {chapterNav}
+          <div className="flex flex-1 min-w-0">
+            <div className="w-1/2 border-r border-gray-800">
+              <ChatPanel chapter={currentChapter} onMessageSent={refreshCurrentChapter} onChapterRefresh={refreshChapter} />
+            </div>
+            <div className="w-1/2">
+              <MangaPanel chapter={currentChapter} onChapterRefresh={refreshChapter} />
+            </div>
           </div>
         </main>
       )}
@@ -290,10 +399,11 @@ function App() {
         </button>
 
         <div className="flex items-center gap-1 text-xs text-gray-600">
-          {chapters.map((_, i) => (
+          {chapters.map((chapter, i) => (
             <button
-              key={i}
+              key={chapter.id}
               onClick={() => setCurrentIdx(i)}
+              aria-label={`跳转到第 ${chapter.chapter_number} 话`}
               className={`w-2 h-2 rounded-full transition-colors ${
                 i === currentIdx ? 'bg-violet-500' : 'bg-gray-700 hover:bg-gray-600'
               }`}
