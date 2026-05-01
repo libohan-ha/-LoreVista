@@ -33,6 +33,7 @@ function App() {
     });
   };
   const [loading, setLoading] = useState(true);
+  const [creatingChapter, setCreatingChapter] = useState(false);
 
   // ─── Restore session from localStorage on mount ─────────
   useEffect(() => {
@@ -115,12 +116,20 @@ function App() {
   };
 
   const handleNext = async () => {
+    if (creatingChapter) return;
     if (currentIdx < chapters.length - 1) {
       setCurrentIdx(currentIdx + 1);
     } else if (story) {
-      const newCh = await createNextChapter(story.id);
-      setChapters((prev) => [...prev, newCh]);
-      setCurrentIdx(chapters.length);
+      setCreatingChapter(true);
+      try {
+        const newCh = await createNextChapter(story.id);
+        setChapters((prev) => [...prev, newCh]);
+        setCurrentIdx(chapters.length);
+      } catch (err: any) {
+        alert(`创建下一话失败: ${err.message}`);
+      } finally {
+        setCreatingChapter(false);
+      }
     }
   };
 
@@ -236,13 +245,15 @@ function App() {
 
         <button
           onClick={handleNext}
+          disabled={creatingChapter}
           className="flex items-center gap-1.5 px-5 py-2 text-sm font-medium rounded-lg
-                     bg-violet-600 hover:bg-violet-500 text-white transition-colors"
+                     bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-40
+                     disabled:cursor-not-allowed transition-colors"
         >
           {currentIdx === chapters.length - 1 ? (
             <>
               <Plus size={16} />
-              下一话（新建）
+              {creatingChapter ? '新建中…' : '下一话（新建）'}
             </>
           ) : (
             <>

@@ -181,6 +181,13 @@ def delete_story(story_id: int, db: Session = Depends(get_db)):
         for msg in chapter.messages:
             db.delete(msg)
         db.delete(chapter)
+    if story.cover_image:
+        cover_path = Path(__file__).resolve().parent / story.cover_image
+        if cover_path.exists():
+            try:
+                cover_path.unlink()
+            except OSError as exc:
+                logger.warning("Failed to delete story cover %s: %s", cover_path, exc)
     db.delete(story)
     db.commit()
     return {"ok": True}
@@ -232,7 +239,12 @@ def get_chapter(chapter_id: int, db: Session = Depends(get_db)):
 
 @app.post("/api/stories/{story_id}/chapters", response_model=ChapterOut)
 def create_next_chapter(story_id: int, db: Session = Depends(get_db)):
-    story = db.get(Story, story_id)
+    story = (
+        db.query(Story)
+        .filter(Story.id == story_id)
+        .with_for_update()
+        .first()
+    )
     if not story:
         raise HTTPException(404, "Story not found")
     max_num = (
@@ -436,43 +448,6 @@ async def set_color_mode(chapter_id: int, body: dict, db: Session = Depends(get_
         raise HTTPException(400, "color_mode must be 'bw' or 'color'")
     _save_color_mode(chapter_id, mode)
     return {"ok": True}
-
-
-# ─── Generate Manga ─────────────────────────────────────────
-
-@app.post("/api/chapters/{chapter_id}/generate-manga")
-async def generate_manga_endpoint(chapter_id: int, db: Session = Depends(get_db)):
-    chapter = db.get(Chapter, chapter_id)
-    if not chapter:
-        raise HTTPException(404, "Chapter not found")
-    if not chapter.novel_content:
-        raise HTTPException(400, "No novel content to generate manga from. Generate novel first.")
-
-    # Step 1: Split novel into 10 scene descriptions
-    scenes = await split_scenes([{"role": "user", "content": chapter.novel_content}])
-
-    # Step 2: Generate images for each scene (sequential to avoid rate limits)
-    results: list[dict] = []
-    for i, scene_prompt in enumerate(scenes, start=1):
-        ref_img = _ref_image_path(chapter_id)
-        image_path = await generate_manga_image(scene_prompt, chapter_id, i, character_profiles=_load_characters(chapter_id), ref_image_path=str(ref_img) if ref_img.exists() else None, color_mode=_load_color_mode(chapter_id))
-        manga = MangaImage(
-            chapter_id=chapter_id,
-            image_number=i,
-            image_path=image_path,
-            prompt=scene_prompt,
-        )
-        db.add(manga)
-        db.commit()
-        db.refresh(manga)
-        results.append({
-            "id": manga.id,
-            "image_number": i,
-            "image_path": image_path,
-            "prompt": scene_prompt,
-        })
-
-    return {"images": results}
 
 
 # ─── Scene generation & management ───────────────────────
