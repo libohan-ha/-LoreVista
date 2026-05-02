@@ -9,12 +9,23 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/manga_novel")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 BASE_DIR = Path(__file__).resolve().parent
+DB_DIR = BASE_DIR / "data"
+DB_DIR.mkdir(exist_ok=True)
+
+# Default to SQLite (zero-config for new users)
+DEFAULT_SQLITE_URL = f"sqlite:///{DB_DIR / 'lorevista.db'}"
+engine_url = DATABASE_URL or DEFAULT_SQLITE_URL
 
 logger = logging.getLogger("database")
 
-engine = create_engine(DATABASE_URL, echo=False)
+# SQLite needs check_same_thread=False for FastAPI's threaded execution
+engine_kwargs = {"echo": False}
+if engine_url.startswith("sqlite"):
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+engine = create_engine(engine_url, **engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
@@ -86,7 +97,7 @@ def _cleanup_duplicate_manga_images():
                 SELECT id, image_path, created_at
                 FROM manga_images
                 WHERE chapter_id = :chapter_id AND image_number = :image_number
-                ORDER BY created_at DESC NULLS LAST, id DESC
+                ORDER BY created_at DESC, id DESC
             """), dict(group)).mappings().all()
             for row in rows[1:]:
                 _safe_unlink(BASE_DIR / row["image_path"])
@@ -134,7 +145,7 @@ def _cleanup_duplicate_chapters():
                 LEFT JOIN manga_images mi ON mi.chapter_id = c.id
                 WHERE c.story_id = :story_id AND c.chapter_number = :chapter_number
                 GROUP BY c.id
-                ORDER BY c.created_at DESC NULLS LAST, c.id DESC
+                ORDER BY c.created_at DESC, c.id DESC
             """), dict(group)).mappings().all()
 
             def sort_key(chapter):
