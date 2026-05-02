@@ -205,6 +205,16 @@ export async function generateNovel(chapterId: number): Promise<Chapter> {
   return res.json();
 }
 
+export async function importNovel(chapterId: number, content: string): Promise<Chapter> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/import-novel`, {
+    method: 'POST',
+    headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // ─── Scenes ─────────────────────────────────────────────────
 
 export async function generateScenes(chapterId: number, signal?: AbortSignal): Promise<string[]> {
