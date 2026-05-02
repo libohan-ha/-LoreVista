@@ -40,6 +40,7 @@ export interface Chapter {
   story_id: number;
   chapter_number: number;
   novel_content: string | null;
+  content_source?: 'chat' | 'import' | null;
   created_at: string;
   messages: ChatMessage[];
   images: MangaImage[];
