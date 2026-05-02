@@ -40,12 +40,25 @@ def normalize_image_bytes(image_bytes: bytes) -> bytes:
         raise RuntimeError("Generated image response is not a valid image") from exc
 
 
-async def generate_manga_image(prompt: str, chapter_id: int, image_number: int, all_scenes: list[str] | None = None, character_profiles: str = "", ref_image_path: str | None = None, color_mode: str = "bw") -> str:
-    """Generate a single manga image and save it. Returns the relative file path."""
+async def generate_manga_image(
+    prompt: str,
+    chapter_id: int,
+    image_number: int,
+    all_scenes: list[str] | None = None,
+    character_profiles: str = "",
+    ref_image_paths: list[str] | None = None,
+    color_mode: str = "bw",
+) -> str:
+    """Generate a single manga image and save it. Returns the relative file path.
+
+    `ref_image_paths` can contain multiple reference images; they will be sent
+    as `image[]` multipart parts (verified to work with duojie API).
+    """
     total_pages = len(all_scenes) if all_scenes else 1
     progress_label = f"{image_number}/{total_pages}"
-    # Detect if we'll use ref image (file must exist)
-    use_ref = bool(ref_image_path) and Path(ref_image_path).exists()
+    # Filter to only existing files
+    valid_refs = [Path(p) for p in (ref_image_paths or []) if p and Path(p).exists()]
+    use_ref = bool(valid_refs)
 
     # Build prompt with character profiles and full script context.
     # IMPORTANT: When ref image is provided, skip the textual character profile
@@ -100,27 +113,27 @@ async def generate_manga_image(prompt: str, chapter_id: int, image_number: int, 
     else:
         full_prompt = f"{ref_block}{char_block}{MANGA_STYLE}\n{prompt}"
 
-    # Prepare reference image bytes if provided
-    ref_image_bytes: bytes | None = None
-    if ref_image_path:
-        ref_path = Path(ref_image_path)
-        if ref_path.exists():
+    # Prepare reference image bytes (one or multiple)
+    ref_blobs: list[tuple[str, bytes]] = []  # list of (filename, bytes)
+    for idx, ref_path in enumerate(valid_refs, start=1):
+        try:
             img = Image.open(ref_path)
             max_side = 1024
             ratio = min(max_side / img.width, max_side / img.height)
             if ratio < 1:
                 img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.LANCZOS)
             buf = io.BytesIO()
-            img.save(buf, format="PNG", optimize=True)
-            ref_image_bytes = buf.getvalue()
-            logger.info(f"[{progress_label}] 参考图已加载: {ref_path.name}, 压缩后 {len(ref_image_bytes) / 1024:.0f} KB")
-        else:
-            logger.warning(f"[{progress_label}] 参考图不存在: {ref_path}")
+            img.convert("RGBA").save(buf, format="PNG", optimize=True)
+            blob = buf.getvalue()
+            ref_blobs.append((f"ref{idx}.png", blob))
+            logger.info(f"[{progress_label}] 参考图 {idx} 已加载: {ref_path.name} → {len(blob) / 1024:.0f} KB")
+        except Exception as exc:
+            logger.warning(f"[{progress_label}] 参考图 {ref_path} 加载失败: {exc}")
 
     last_err: Exception | None = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            mode = "edits(垫图)" if ref_image_bytes else "generations"
+            mode = f"edits({len(ref_blobs)}图垫图)" if ref_blobs else "generations"
             logger.info(f"[{progress_label}] 开始调用 Image2 API [{mode}]（尝试 {attempt}/{MAX_RETRIES}）")
             t0 = time.time()
             timeout = httpx.Timeout(connect=30, read=600, write=120, pool=30)
@@ -128,11 +141,19 @@ async def generate_manga_image(prompt: str, chapter_id: int, image_number: int, 
             # silently break on Windows and cause the 2nd multipart request to hang.
             limits = httpx.Limits(max_connections=1, max_keepalive_connections=0)
             async with httpx.AsyncClient(timeout=timeout, limits=limits) as client:
-                if ref_image_bytes:
-                    # Use /images/edits multipart for reference image
+                if ref_blobs:
+                    # Use /images/edits multipart for reference image(s).
+                    # Single ref → "image" key (legacy compat). Multiple → "image[]" array.
+                    if len(ref_blobs) == 1:
+                        files = [("image", (ref_blobs[0][0], io.BytesIO(ref_blobs[0][1]), "image/png"))]
+                    else:
+                        files = [
+                            ("image[]", (name, io.BytesIO(blob), "image/png"))
+                            for name, blob in ref_blobs
+                        ]
                     resp = await client.post(
                         f"{IMAGE_API_BASE_URL}/images/edits",
-                        files={"image": ("ref.png", io.BytesIO(ref_image_bytes), "image/png")},
+                        files=files,
                         data={
                             "model": IMAGE_MODEL,
                             "prompt": full_prompt,
