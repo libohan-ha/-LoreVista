@@ -51,6 +51,7 @@ class ChapterOut(BaseModel):
     story_id: int
     chapter_number: int
     novel_content: Optional[str] = None
+    content_source: Optional[str] = None
     created_at: datetime.datetime
     messages: list[ChatMessageOut] = []
     images: list[MangaImageOut] = []

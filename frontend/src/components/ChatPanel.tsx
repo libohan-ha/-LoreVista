@@ -27,6 +27,9 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
   const abortRef = useRef<AbortController | null>(null);
   const streamingChapterIdRef = useRef<number | null>(null);
   const userScrolledUp = useRef(false);
+  const source = chapter?.content_source ?? null;
+  const isImportLocked = source === 'import';
+  const isChatLocked = source === 'chat' || (!!chapter && !source && chapter.messages.length > 0);
 
   const autoResize = (el: HTMLTextAreaElement) => {
     el.style.height = 'auto';
@@ -46,15 +49,13 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
     streamingChapterIdRef.current = null;
     if (chapter) {
       setMessages(chapter.messages.map((m) => ({ role: m.role, content: m.content })));
-      // Pre-fill import textarea if chapter has imported novel content (single user message)
-      const isImported =
-        chapter.messages.length === 1 && chapter.messages[0].role === 'user' && (chapter.novel_content || '').length > 0;
-      setImportText(isImported ? chapter.novel_content || '' : '');
+      setImportText(chapter.content_source === 'import' ? chapter.novel_content || '' : '');
+      setMode(chapter.content_source === 'import' ? 'import' : 'chat');
     } else {
       setMessages([]);
       setImportText('');
+      setMode('chat');
     }
-    setMode('chat');
     setImportError('');
     setStreamContent('');
     setStreaming(false);
@@ -86,7 +87,7 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
   }, []);
 
   const handleSend = () => {
-    if (!input.trim() || !chapter || streaming) return;
+    if (!input.trim() || !chapter || streaming || isImportLocked) return;
     const userMsg = { role: 'user', content: input.trim() };
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
@@ -150,7 +151,7 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
   };
 
   const handleImportSave = async () => {
-    if (!chapter || importing) return;
+    if (!chapter || importing || isChatLocked) return;
     const text = importText.trim();
     if (!text) {
       setImportError('请输入小说内容');
@@ -160,14 +161,12 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
       setImportError(`内容过长，请控制在 ${MAX_IMPORT_CHARS} 字以内（当前 ${text.length} 字）`);
       return;
     }
-    if (messages.length > 0) {
-      const ok = window.confirm('保存后将清空当前章节的对话历史，确定吗？');
-      if (!ok) return;
-    }
     setImporting(true);
     setImportError('');
     try {
-      await importNovel(chapter.id, text);
+      const updated = await importNovel(chapter.id, text);
+      setMessages(updated.messages.map((m) => ({ role: m.role, content: m.content })));
+      setImportText(updated.novel_content || text);
       onChapterRefresh?.(chapter.id);
     } catch (err: any) {
       setImportError(err.message || '保存失败');
@@ -186,7 +185,7 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
         <div className="flex items-center gap-1 bg-gray-900 rounded-lg p-1 border border-gray-800">
           <button
             onClick={() => setMode('chat')}
-            disabled={streaming}
+            disabled={streaming || isImportLocked}
             className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-colors ${
               mode === 'chat'
                 ? 'bg-violet-600 text-white'
@@ -198,7 +197,7 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
           </button>
           <button
             onClick={() => setMode('import')}
-            disabled={streaming}
+            disabled={streaming || isChatLocked}
             className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-colors ${
               mode === 'import'
                 ? 'bg-violet-600 text-white'
@@ -214,8 +213,11 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
       {mode === 'import' ? (
         <div className="flex-1 flex flex-col min-h-0">
           <div className="px-5 pt-4 pb-2 text-xs text-gray-500 leading-relaxed shrink-0">
-            将你已有的小说内容粘贴到下方，保存后切换到右侧「漫画」面板即可生成分镜与漫画图片。
-            <span className="text-gray-600">（保存会清空当前章节的对话记录）</span>
+            {isImportLocked
+              ? '本话已导入小说，不能再使用 AI 对话。右侧「漫画」面板可继续生成分镜与漫画图片。'
+              : isChatLocked
+                ? '本话已使用 AI 对话创作，不能再粘贴小说。请新建下一话后导入已有小说。'
+                : '将你已有的小说内容粘贴到下方，保存后本话将锁定为「粘贴小说」模式。'}
           </div>
           <div className="flex-1 px-5 pb-3 min-h-0">
             <textarea
@@ -224,9 +226,10 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
                 setImportText(e.target.value);
                 if (importError) setImportError('');
               }}
+              disabled={isImportLocked || isChatLocked}
               placeholder={`粘贴小说全文…（最长 ${MAX_IMPORT_CHARS} 字）`}
               className="w-full h-full bg-gray-900 border border-gray-800 rounded-lg p-3 text-sm text-gray-200
-                         placeholder-gray-600 resize-none outline-none focus:border-violet-600 transition-colors
+                         placeholder-gray-600 resize-none outline-none focus:border-violet-600 transition-colors disabled:opacity-70
                          font-mono leading-relaxed"
             />
           </div>
@@ -237,13 +240,13 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
             </div>
             <button
               onClick={handleImportSave}
-              disabled={!chapter || importing || !importText.trim()}
+              disabled={!chapter || importing || isImportLocked || isChatLocked || !importText.trim()}
               className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg
                          bg-violet-600 hover:bg-violet-500 text-white
                          disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
               <Save size={13} />
-              {importing ? '保存中…' : '保存小说'}
+              {isImportLocked ? '已导入' : importing ? '保存中…' : '保存小说'}
             </button>
           </div>
         </div>
@@ -317,8 +320,9 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
                 }}
                 onKeyDown={handleKeyDown}
                 placeholder="描述你的小说想法…"
+                disabled={isImportLocked}
                 rows={1}
-                className="flex-1 bg-transparent text-sm text-gray-200 placeholder-gray-600 resize-none outline-none"
+                className="flex-1 bg-transparent text-sm text-gray-200 placeholder-gray-600 resize-none outline-none disabled:opacity-50"
                 style={{ maxHeight: '160px', overflow: 'auto' }}
               />
               {streaming ? (
@@ -332,7 +336,7 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
               ) : (
                 <button
                   onClick={handleSend}
-                  disabled={!input.trim()}
+                  disabled={!input.trim() || isImportLocked}
                   className="p-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-30
                          disabled:cursor-not-allowed transition-colors shrink-0"
                 >

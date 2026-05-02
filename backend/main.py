@@ -115,6 +115,24 @@ def _write_bytes_or_conflict(path: Path, data: bytes, label: str) -> None:
         raise HTTPException(409, f"{label} file is currently in use. Try again later")
 
 
+def _chapter_dir(chapter_id: int) -> Path:
+    return Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}"
+
+
+def _clear_chapter_manga_state(chapter: Chapter, db: Session) -> None:
+    chapter_dir = _chapter_dir(chapter.id)
+    if chapter_dir.exists():
+        for filename in ("scenes.txt",):
+            path = chapter_dir / filename
+            if path.exists():
+                _unlink_file(path, filename)
+        for img in list(chapter.images):
+            img_path = Path(__file__).resolve().parent / img.image_path
+            if img_path.exists():
+                _unlink_file(img_path, "manga image")
+            db.delete(img)
+
+
 def _decode_png_upload(b64: str) -> bytes:
     if not b64:
         raise HTTPException(400, "No image provided")
@@ -332,8 +350,11 @@ async def chat(chapter_id: int, body: ChatMessageIn, db: Session = Depends(get_d
     chapter = db.get(Chapter, chapter_id)
     if not chapter:
         raise HTTPException(404, "Chapter not found")
+    if chapter.content_source == "import":
+        raise HTTPException(409, "This chapter was imported from existing novel text and cannot use AI chat")
 
     # Save user message
+    chapter.content_source = "chat"
     user_msg = ChatMessage(chapter_id=chapter_id, role="user", content=body.content)
     db.add(user_msg)
     db.commit()
@@ -397,6 +418,8 @@ async def generate_novel_endpoint(chapter_id: int, db: Session = Depends(get_db)
     chapter = db.get(Chapter, chapter_id)
     if not chapter:
         raise HTTPException(404, "Chapter not found")
+    if chapter.content_source == "import":
+        raise HTTPException(409, "This chapter was imported from existing novel text and cannot generate AI novel text")
 
     history = [{"role": m.role, "content": m.content} for m in chapter.messages]
     if not history:
@@ -404,6 +427,7 @@ async def generate_novel_endpoint(chapter_id: int, db: Session = Depends(get_db)
 
     novel_content = await generate_novel(history)
     chapter.novel_content = novel_content
+    chapter.content_source = "chat"
 
     # Also save as assistant message
     msg = ChatMessage(chapter_id=chapter_id, role="assistant", content=novel_content)
@@ -436,11 +460,16 @@ async def import_novel_endpoint(chapter_id: int, request: Request, db: Session =
         raise HTTPException(400, "content is empty")
     if len(text) > MAX_IMPORTED_NOVEL_CHARS:
         raise HTTPException(413, f"Novel is too long. Max length is {MAX_IMPORTED_NOVEL_CHARS} characters")
+    if chapter.content_source == "chat" or chapter.messages:
+        raise HTTPException(409, "This chapter already uses AI chat. Create a new chapter to import existing novel text.")
+    if chapter.images:
+        raise HTTPException(409, "This chapter already has manga images. Create a new chapter to import existing novel text.")
 
-    # Wipe existing chat history to avoid mixing with imported content
+    _clear_chapter_manga_state(chapter, db)
     db.query(ChatMessage).filter(ChatMessage.chapter_id == chapter_id).delete()
     db.add(ChatMessage(chapter_id=chapter_id, role="user", content=text))
     chapter.novel_content = text
+    chapter.content_source = "import"
     db.commit()
     db.refresh(chapter)
     return chapter

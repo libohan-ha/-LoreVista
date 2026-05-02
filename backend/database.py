@@ -48,6 +48,36 @@ def _migrate():
                 conn.execute(text("ALTER TABLE stories ADD COLUMN cover_image VARCHAR(500)"))
             if "character_profiles" not in cols:
                 conn.execute(text("ALTER TABLE stories ADD COLUMN character_profiles TEXT DEFAULT ''"))
+    if "chapters" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("chapters")}
+        with engine.begin() as conn:
+            if "content_source" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN content_source VARCHAR(20)"))
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE chapters
+                SET content_source = CASE
+                    WHEN novel_content IS NOT NULL AND btrim(novel_content) <> ''
+                         AND (
+                            SELECT COUNT(*) FROM chat_messages
+                            WHERE chat_messages.chapter_id = chapters.id
+                         ) = 1
+                         AND EXISTS (
+                            SELECT 1 FROM chat_messages
+                            WHERE chat_messages.chapter_id = chapters.id
+                              AND chat_messages.role = 'user'
+                              AND chat_messages.content = chapters.novel_content
+                         )
+                    THEN 'import'
+                    WHEN EXISTS (
+                        SELECT 1 FROM chat_messages
+                        WHERE chat_messages.chapter_id = chapters.id
+                    )
+                    THEN 'chat'
+                    ELSE NULL
+                END
+                WHERE content_source IS NULL
+            """))
     _cleanup_duplicate_chapters()
     _cleanup_duplicate_manga_images()
     _add_unique_constraints()
