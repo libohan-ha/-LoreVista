@@ -413,6 +413,39 @@ async def generate_novel_endpoint(chapter_id: int, db: Session = Depends(get_db)
     return chapter
 
 
+MAX_IMPORTED_NOVEL_CHARS = int(os.getenv("MAX_IMPORTED_NOVEL_CHARS", "50000"))
+
+
+@app.post("/api/chapters/{chapter_id}/import-novel", response_model=ChapterOut)
+async def import_novel_endpoint(chapter_id: int, request: Request, db: Session = Depends(get_db)):
+    """Replace chapter chat history with a single user-imported novel text.
+
+    The imported text is saved both as a single chat message (so the existing
+    `generate-scenes` flow works unchanged) and as `chapter.novel_content`.
+    """
+    chapter = db.get(Chapter, chapter_id)
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+
+    body = await request.json()
+    raw = body.get("content", "")
+    if not isinstance(raw, str):
+        raise HTTPException(400, "content must be a string")
+    text = raw.strip()
+    if not text:
+        raise HTTPException(400, "content is empty")
+    if len(text) > MAX_IMPORTED_NOVEL_CHARS:
+        raise HTTPException(413, f"Novel is too long. Max length is {MAX_IMPORTED_NOVEL_CHARS} characters")
+
+    # Wipe existing chat history to avoid mixing with imported content
+    db.query(ChatMessage).filter(ChatMessage.chapter_id == chapter_id).delete()
+    db.add(ChatMessage(chapter_id=chapter_id, role="user", content=text))
+    chapter.novel_content = text
+    db.commit()
+    db.refresh(chapter)
+    return chapter
+
+
 # ─── Character Profiles ───────────────────────────────────
 
 def _characters_path(chapter_id: int) -> Path:
