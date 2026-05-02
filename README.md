@@ -63,6 +63,11 @@ MAX_UPLOAD_BYTES=10485760
 API_TOKEN=
 ```
 
+**密钥获取指南：**
+
+- **DeepSeek API Key**: [https://platform.deepseek.com](https://platform.deepseek.com) 注册并充值，在 API Keys 页面创建并填入
+- **Image2 API Key**: [https://api.duojie.games/console](https://api.duojie.games/console) 注册后充值额度，在「令牌管理」中创建 API Key 填入
+
 如果后端设置了 `API_TOKEN`，前端需要在 `frontend/.env` 中设置相同令牌：
 
 ```
