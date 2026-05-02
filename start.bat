@@ -1,31 +1,35 @@
 @echo off
 chcp 65001 >nul
+title LoreVista Launcher
 cd /d "%~dp0"
 
 echo ==========================================
-echo    LoreVista - 启动前后端 + 自动打开浏览器
+echo    LoreVista - Starting Backend + Frontend
 echo ==========================================
 echo.
 
-echo [1/3] 启动后端 (Python FastAPI) ...
-start "Backend - LoreVista" /MIN cmd /c "cd backend && python main.py"
+echo [1/3] Starting backend (FastAPI) ...
+start "LoreVista Backend" /MIN cmd /c "cd /d %~dp0backend && python main.py"
 
-echo [2/3] 等待后端初始化 (2秒) ...
+echo [2/3] Waiting for backend (2s) ...
 timeout /t 2 /nobreak >nul
 
-echo [3/3] 启动前端 (Vite) ...
-start "Frontend - LoreVista" /MIN cmd /c "cd frontend && npm run dev"
+echo [3/3] Starting frontend (Vite) ...
+start "LoreVista Frontend" /MIN cmd /c "cd /d %~dp0frontend && npm run dev"
 
-echo 等待前端启动 (3秒) ...
-timeout /t 3 /nobreak >nul
+echo Waiting for frontend (4s) ...
+timeout /t 4 /nobreak >nul
 
-echo 打开浏览器 ...
-start http://localhost:5173
+echo Opening browser ...
+start "" "http://localhost:5173"
 
 echo.
 echo ==========================================
-echo    前后端已启动！浏览器已打开
-echo    后端: http://localhost:8000
-echo    前端: http://localhost:5173
+echo    Running!
+echo    Backend : http://localhost:8000
+echo    Frontend: http://localhost:5173
 echo ==========================================
-pause
+echo.
+echo Press any key to close this launcher window.
+echo (Backend/Frontend windows will keep running)
+pause >nul
