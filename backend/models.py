@@ -13,6 +13,7 @@ class Story(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False, default="未命名故事")
     description: Mapped[str | None] = mapped_column(Text, nullable=True, default="")
     cover_image: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    ref_image: Mapped[str | None] = mapped_column(String(500), nullable=True)
     character_profiles: Mapped[str | None] = mapped_column(Text, nullable=True, default="")
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -31,6 +32,11 @@ class Chapter(Base):
     story_id: Mapped[int] = mapped_column(Integer, ForeignKey("stories.id"), nullable=False)
     chapter_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     novel_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scenes_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    character_profiles: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ref_image: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    color_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    image_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
     story: Mapped["Story"] = relationship("Story", back_populates="chapters")

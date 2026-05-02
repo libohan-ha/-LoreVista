@@ -51,9 +51,9 @@ npm run dev
 DEEPSEEK_API_KEY=你的DeepSeek密钥
 IMAGE_API_KEY=你的图片生成API密钥
 
-# 数据库默认使用 SQLite（零配置，开箱即用）
-# 如需 PostgreSQL，取消下方注释：
-# DATABASE_URL=postgresql://postgres:postgres@localhost:5432/manga_novel
+# 数据库默认使用 SQLite：backend/data/lorevista.db
+# 可选：自定义 SQLite 文件位置
+# SQLITE_DB_PATH=data/lorevista.db
 
 HOST=127.0.0.1
 PORT=8000
@@ -79,7 +79,8 @@ VITE_API_TOKEN=同一个令牌
 ```
 ├── backend/
 │   ├── main.py              # FastAPI 主应用
-│   ├── database.py          # 数据库模型
+│   ├── database.py          # SQLite 数据库连接与迁移
+│   ├── data/                # 本地 SQLite 数据库（不会提交到 Git）
 │   ├── services/
 │   │   ├── deepseek.py      # DeepSeek 小说/分镜服务
 │   │   └── image2.py        # 图片生成服务

@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
@@ -283,26 +284,31 @@ def get_chapter(chapter_id: int, db: Session = Depends(get_db)):
 
 @app.post("/api/stories/{story_id}/chapters", response_model=ChapterOut)
 def create_next_chapter(story_id: int, db: Session = Depends(get_db)):
-    story = (
-        db.query(Story)
-        .filter(Story.id == story_id)
-        .with_for_update()
-        .first()
-    )
+    story = db.get(Story, story_id)
     if not story:
         raise HTTPException(404, "Story not found")
-    max_num = (
-        db.query(Chapter.chapter_number)
-        .filter(Chapter.story_id == story_id)
-        .order_by(Chapter.chapter_number.desc())
-        .first()
-    )
-    next_num = (max_num[0] + 1) if max_num else 1
-    chapter = Chapter(story_id=story_id, chapter_number=next_num)
-    db.add(chapter)
-    db.commit()
-    db.refresh(chapter)
-    return chapter
+
+    last_error: Exception | None = None
+    for _attempt in range(3):
+        max_num = (
+            db.query(Chapter.chapter_number)
+            .filter(Chapter.story_id == story_id)
+            .order_by(Chapter.chapter_number.desc())
+            .first()
+        )
+        next_num = (max_num[0] + 1) if max_num else 1
+        chapter = Chapter(story_id=story_id, chapter_number=next_num)
+        db.add(chapter)
+        try:
+            db.commit()
+            db.refresh(chapter)
+            return chapter
+        except (IntegrityError, OperationalError) as exc:
+            db.rollback()
+            last_error = exc
+            logger.warning("Retrying chapter creation after database conflict: %s", exc)
+
+    raise HTTPException(409, f"Could not create next chapter due to database conflict: {last_error}")
 
 
 @app.delete("/api/chapters/{chapter_id}")
@@ -420,24 +426,16 @@ def _characters_path(chapter_id: int) -> Path:
 
 
 def _load_characters(chapter_id: int, db: Session | None = None) -> str:
-    """Load character profiles: chapter-level file first, then fallback to story-level."""
-    p = _characters_path(chapter_id)
-    if p.exists():
-        text = p.read_text(encoding="utf-8").strip()
-        if text:
-            return text
-    # Fallback to story-level
+    """Load character profiles: chapter-level DB override first, then fallback to story-level."""
     if db:
         chapter = db.get(Chapter, chapter_id)
+        if chapter and chapter.character_profiles:
+            text = chapter.character_profiles.strip()
+            if text:
+                return text
         if chapter and chapter.story and chapter.story.character_profiles:
             return chapter.story.character_profiles.strip()
     return ""
-
-
-def _has_chapter_characters(chapter_id: int) -> bool:
-    """Check if chapter has its own character file (not inherited)."""
-    p = _characters_path(chapter_id)
-    return p.exists() and bool(p.read_text(encoding="utf-8").strip())
 
 
 # Story-level character profiles
@@ -463,30 +461,34 @@ async def save_story_characters(story_id: int, body: dict, db: Session = Depends
 @app.get("/api/chapters/{chapter_id}/characters")
 async def get_characters(chapter_id: int, db: Session = Depends(get_db)):
     chapter = _require_chapter(chapter_id, db)
-    has_own = _has_chapter_characters(chapter_id)
-    if has_own:
-        text = _characters_path(chapter_id).read_text(encoding="utf-8").strip()
-    else:
-        text = (chapter.story.character_profiles or "").strip() if chapter.story else ""
-    return {"characters": text, "source": "chapter" if has_own else ("story" if text else "none")}
+    own_text = (chapter.character_profiles or "").strip()
+    if own_text:
+        return {"characters": own_text, "source": "chapter"}
+    text = (chapter.story.character_profiles or "").strip() if chapter.story else ""
+    return {"characters": text, "source": "story" if text else "none"}
 
 
 @app.put("/api/chapters/{chapter_id}/characters")
 async def save_characters(chapter_id: int, body: dict, db: Session = Depends(get_db)):
-    _require_chapter(chapter_id, db)
+    chapter = _require_chapter(chapter_id, db)
     text = _character_profile_text(body)
+    chapter.character_profiles = text
     p = _characters_path(chapter_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
+    db.commit()
     return {"ok": True}
 
 
 @app.delete("/api/chapters/{chapter_id}/characters")
 async def reset_chapter_characters(chapter_id: int, db: Session = Depends(get_db)):
     """Delete chapter-level override so it falls back to story-level."""
-    _require_chapter(chapter_id, db)
+    chapter = _require_chapter(chapter_id, db)
     p = _characters_path(chapter_id)
-    _unlink_file(p, "character profile")
+    if p.exists():
+        _unlink_file(p, "character profile")
+    chapter.character_profiles = None
+    db.commit()
     return {"ok": True}
 
 
@@ -504,16 +506,33 @@ def _story_ref_image_static_path(story_id: int) -> str:
     return f"manga_outputs/story_{story_id}/ref_image.png"
 
 
+def _chapter_ref_image_static_path(chapter_id: int) -> str:
+    return f"manga_outputs/chapter_{chapter_id}/ref_image.png"
+
+
+def _story_ref_image_db_path(story: Story) -> Path | None:
+    if not story.ref_image:
+        return None
+    p = Path(__file__).resolve().parent / story.ref_image
+    return p if p.exists() else None
+
+
+def _chapter_ref_image_db_path(chapter: Chapter) -> Path | None:
+    if not chapter.ref_image:
+        return None
+    p = Path(__file__).resolve().parent / chapter.ref_image
+    return p if p.exists() else None
+
+
 def _effective_ref_image_path(chapter_id: int, db: Session) -> Path | None:
     """Return the effective ref image path: chapter-level first, then story-level fallback."""
-    cp = _chapter_ref_image_path(chapter_id)
-    if cp.exists():
-        return cp
     chapter = db.get(Chapter, chapter_id)
     if chapter:
-        sp = _story_ref_image_path(chapter.story_id)
-        if sp.exists():
-            return sp
+        cp = _chapter_ref_image_db_path(chapter)
+        if cp:
+            return cp
+    if chapter and chapter.story:
+        return _story_ref_image_db_path(chapter.story)
     return None
 
 
@@ -523,9 +542,9 @@ async def get_story_ref_image(story_id: int, db: Session = Depends(get_db)):
     story = db.get(Story, story_id)
     if not story:
         raise HTTPException(404, "Story not found")
-    p = _story_ref_image_path(story_id)
-    if p.exists():
-        return {"has_ref": True, "size_kb": round(p.stat().st_size / 1024), "image_path": _story_ref_image_static_path(story_id)}
+    p = _story_ref_image_db_path(story)
+    if p:
+        return {"has_ref": True, "size_kb": round(p.stat().st_size / 1024), "image_path": story.ref_image}
     return {"has_ref": False}
 
 
@@ -540,7 +559,9 @@ async def upload_story_ref_image(story_id: int, request: Request, db: Session = 
     p = _story_ref_image_path(story_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     _write_bytes_or_conflict(p, img_bytes, "story ref image")
-    return {"ok": True, "size_kb": round(len(img_bytes) / 1024), "image_path": _story_ref_image_static_path(story_id)}
+    story.ref_image = _story_ref_image_static_path(story_id)
+    db.commit()
+    return {"ok": True, "size_kb": round(len(img_bytes) / 1024), "image_path": story.ref_image}
 
 
 @app.delete("/api/stories/{story_id}/ref-image")
@@ -548,8 +569,11 @@ async def delete_story_ref_image(story_id: int, db: Session = Depends(get_db)):
     story = db.get(Story, story_id)
     if not story:
         raise HTTPException(404, "Story not found")
-    p = _story_ref_image_path(story_id)
-    _unlink_file(p, "story ref image")
+    p = _story_ref_image_db_path(story) or _story_ref_image_path(story_id)
+    if p.exists():
+        _unlink_file(p, "story ref image")
+    story.ref_image = None
+    db.commit()
     return {"ok": True}
 
 
@@ -557,33 +581,38 @@ async def delete_story_ref_image(story_id: int, db: Session = Depends(get_db)):
 @app.get("/api/chapters/{chapter_id}/ref-image")
 async def get_ref_image(chapter_id: int, db: Session = Depends(get_db)):
     chapter = _require_chapter(chapter_id, db)
-    cp = _chapter_ref_image_path(chapter_id)
-    if cp.exists():
+    cp = _chapter_ref_image_db_path(chapter)
+    if cp:
         return {"has_ref": True, "source": "chapter", "size_kb": round(cp.stat().st_size / 1024)}
-    sp = _story_ref_image_path(chapter.story_id)
-    if sp.exists():
+    sp = _story_ref_image_db_path(chapter.story)
+    if sp:
         return {"has_ref": True, "source": "story", "size_kb": round(sp.stat().st_size / 1024)}
     return {"has_ref": False, "source": "none"}
 
 
 @app.post("/api/chapters/{chapter_id}/ref-image")
 async def upload_ref_image(chapter_id: int, request: Request, db: Session = Depends(get_db)):
-    _require_chapter(chapter_id, db)
+    chapter = _require_chapter(chapter_id, db)
     body = await request.json()
     b64 = body.get("image", "")
     img_bytes = _decode_png_upload(b64)
     p = _chapter_ref_image_path(chapter_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     _write_bytes_or_conflict(p, img_bytes, "chapter ref image")
+    chapter.ref_image = _chapter_ref_image_static_path(chapter_id)
+    db.commit()
     return {"ok": True, "size_kb": round(len(img_bytes) / 1024)}
 
 
 @app.delete("/api/chapters/{chapter_id}/ref-image")
 async def delete_ref_image(chapter_id: int, db: Session = Depends(get_db)):
     """Delete chapter-level ref image override so it falls back to story-level."""
-    _require_chapter(chapter_id, db)
-    p = _chapter_ref_image_path(chapter_id)
-    _unlink_file(p, "chapter ref image")
+    chapter = _require_chapter(chapter_id, db)
+    p = _chapter_ref_image_db_path(chapter) or _chapter_ref_image_path(chapter_id)
+    if p.exists():
+        _unlink_file(p, "chapter ref image")
+    chapter.ref_image = None
+    db.commit()
     return {"ok": True}
 
 
@@ -593,10 +622,11 @@ def _color_mode_path(chapter_id: int) -> Path:
     return Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}" / "color_mode.txt"
 
 
-def _load_color_mode(chapter_id: int) -> str:
-    p = _color_mode_path(chapter_id)
-    if p.exists():
-        return p.read_text(encoding="utf-8").strip() or "bw"
+def _load_color_mode(chapter_id: int, db: Session | None = None) -> str:
+    if db:
+        chapter = db.get(Chapter, chapter_id)
+        if chapter and chapter.color_mode in ("bw", "color"):
+            return chapter.color_mode
     return "bw"
 
 
@@ -609,16 +639,18 @@ def _save_color_mode(chapter_id: int, mode: str):
 @app.get("/api/chapters/{chapter_id}/color-mode")
 async def get_color_mode(chapter_id: int, db: Session = Depends(get_db)):
     _require_chapter(chapter_id, db)
-    return {"color_mode": _load_color_mode(chapter_id)}
+    return {"color_mode": _load_color_mode(chapter_id, db)}
 
 
 @app.put("/api/chapters/{chapter_id}/color-mode")
 async def set_color_mode(chapter_id: int, body: dict, db: Session = Depends(get_db)):
-    _require_chapter(chapter_id, db)
+    chapter = _require_chapter(chapter_id, db)
     mode = body.get("color_mode", "bw")
     if mode not in ("bw", "color"):
         raise HTTPException(400, "color_mode must be 'bw' or 'color'")
+    chapter.color_mode = mode
     _save_color_mode(chapter_id, mode)
+    db.commit()
     return {"ok": True}
 
 
@@ -632,45 +664,57 @@ def _image_count_path(chapter_id: int) -> Path:
     return Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}" / "image_count.txt"
 
 
-def _load_image_count(chapter_id: int) -> int:
-    p = _image_count_path(chapter_id)
-    if p.exists():
-        try:
-            v = int(p.read_text(encoding="utf-8").strip())
-            if v in ALLOWED_IMAGE_COUNTS:
-                return v
-        except (ValueError, OSError):
-            pass
+def _load_image_count(chapter_id: int, db: Session | None = None) -> int:
+    if db:
+        chapter = db.get(Chapter, chapter_id)
+        if chapter and chapter.image_count in ALLOWED_IMAGE_COUNTS:
+            return int(chapter.image_count)
     return DEFAULT_IMAGE_COUNT
 
 
-def _chapter_has_scene_file(chapter_id: int) -> bool:
-    prompts_file = Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}" / "scenes.txt"
-    if not prompts_file.exists():
-        return False
-    try:
-        return bool(prompts_file.read_text(encoding="utf-8").strip())
-    except OSError:
-        return True
+def _scenes_path(chapter_id: int) -> Path:
+    return Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}" / "scenes.txt"
+
+
+def _serialize_scenes(scenes: list[str]) -> str:
+    return "\n\n".join(f"=== 第{idx}格 ===\n{s}" for idx, s in enumerate(scenes, 1)).strip() + "\n"
+
+
+def _parse_scenes_text(raw: str | None) -> list[str]:
+    if not raw or not raw.strip():
+        return []
+    import re
+    parts = re.split(r"=== 第\d+格 ===\n", raw)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _save_chapter_scenes(chapter: Chapter, scenes: list[str]) -> None:
+    raw = _serialize_scenes(scenes)
+    chapter.scenes_text = raw
+    prompts_file = _scenes_path(chapter.id)
+    prompts_file.parent.mkdir(parents=True, exist_ok=True)
+    prompts_file.write_text(raw, encoding="utf-8")
 
 
 @app.get("/api/chapters/{chapter_id}/image-count")
 async def get_image_count(chapter_id: int, db: Session = Depends(get_db)):
     _require_chapter(chapter_id, db)
-    return {"image_count": _load_image_count(chapter_id)}
+    return {"image_count": _load_image_count(chapter_id, db)}
 
 
 @app.put("/api/chapters/{chapter_id}/image-count")
 async def set_image_count(chapter_id: int, body: dict, db: Session = Depends(get_db)):
     chapter = _require_chapter(chapter_id, db)
-    if chapter.images or _chapter_has_scene_file(chapter_id):
+    if chapter.images or _parse_scenes_text(chapter.scenes_text):
         raise HTTPException(409, "Cannot change image count after scenes or images have been created")
     count = body.get("image_count", DEFAULT_IMAGE_COUNT)
     if count not in ALLOWED_IMAGE_COUNTS:
         raise HTTPException(400, f"image_count must be one of {ALLOWED_IMAGE_COUNTS}")
+    chapter.image_count = count
     p = _image_count_path(chapter_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(str(count), encoding="utf-8")
+    db.commit()
     return {"ok": True}
 
 
@@ -685,7 +729,7 @@ async def generate_scenes_endpoint(chapter_id: int, request: Request, db: Sessio
     if not chapter.messages:
         raise HTTPException(400, "No chat messages yet")
 
-    image_count = _load_image_count(chapter_id)
+    image_count = _load_image_count(chapter_id, db)
     chat_history = [{"role": m.role, "content": m.content} for m in chapter.messages]
     split_task = asyncio.create_task(
         split_scenes(chat_history, character_profiles=_load_characters(chapter_id, db), page_count=image_count)
@@ -710,49 +754,30 @@ async def generate_scenes_endpoint(chapter_id: int, request: Request, db: Sessio
             with contextlib.suppress(asyncio.CancelledError):
                 await split_task
 
-    # Save to file
-    prompts_dir = Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}"
-    prompts_dir.mkdir(parents=True, exist_ok=True)
-    prompts_file = prompts_dir / "scenes.txt"
-    with open(prompts_file, "w", encoding="utf-8") as f:
-        for idx, s in enumerate(scenes, 1):
-            f.write(f"=== 第{idx}格 ===\n{s}\n\n")
+    _save_chapter_scenes(chapter, scenes)
+    db.commit()
 
     return {"scenes": scenes}
 
 
 @app.get("/api/chapters/{chapter_id}/scenes")
 async def get_scenes_endpoint(chapter_id: int, db: Session = Depends(get_db)):
-    """Load saved scene prompts from file."""
-    _require_chapter(chapter_id, db)
-    prompts_file = Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}" / "scenes.txt"
-    if not prompts_file.exists():
-        return {"scenes": []}
-    try:
-        import re
-        raw = prompts_file.read_text(encoding="utf-8")
-        parts = re.split(r"=== 第\d+格 ===\n", raw)
-        parts = [p.strip() for p in parts if p.strip()]
-        return {"scenes": parts}
-    except Exception:
-        return {"scenes": []}
+    """Load saved scene prompts from SQLite."""
+    chapter = _require_chapter(chapter_id, db)
+    return {"scenes": _parse_scenes_text(chapter.scenes_text)}
 
 
 @app.put("/api/chapters/{chapter_id}/scenes")
 async def update_scenes_endpoint(chapter_id: int, body: dict, db: Session = Depends(get_db)):
     """Save user-edited scene prompts."""
-    _require_chapter(chapter_id, db)
+    chapter = _require_chapter(chapter_id, db)
     scenes = body.get("scenes", [])
-    image_count = _load_image_count(chapter_id)
+    image_count = _load_image_count(chapter_id, db)
     if not isinstance(scenes, list) or len(scenes) != image_count or not all(isinstance(s, str) and s.strip() for s in scenes):
         raise HTTPException(400, f"Must provide exactly {image_count} scenes")
 
-    prompts_dir = Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}"
-    prompts_dir.mkdir(parents=True, exist_ok=True)
-    prompts_file = prompts_dir / "scenes.txt"
-    with open(prompts_file, "w", encoding="utf-8") as f:
-        for idx, s in enumerate(scenes, 1):
-            f.write(f"=== 第{idx}格 ===\n{s}\n\n")
+    _save_chapter_scenes(chapter, scenes)
+    db.commit()
 
     return {"ok": True}
 
@@ -765,15 +790,10 @@ async def generate_manga_stream(chapter_id: int, db: Session = Depends(get_db)):
     if not chapter:
         raise HTTPException(404, "Chapter not found")
 
-    # Load scenes from file (must exist - user should generate/confirm scenes first)
-    import re
-    prompts_file = Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}" / "scenes.txt"
-    if not prompts_file.exists():
+    image_count = _load_image_count(chapter_id, db)
+    scenes = _parse_scenes_text(chapter.scenes_text)
+    if not scenes:
         raise HTTPException(400, "No scene prompts found. Generate scenes first.")
-    image_count = _load_image_count(chapter_id)
-    raw = prompts_file.read_text(encoding="utf-8")
-    parts = re.split(r"=== 第\d+格 ===\n", raw)
-    scenes = [p.strip() for p in parts if p.strip()]
     if len(scenes) != image_count:
         raise HTTPException(400, f"Expected {image_count} scenes, found {len(scenes)}")
     if chapter_id in ACTIVE_MANGA_GENERATIONS:
@@ -809,7 +829,7 @@ async def generate_manga_stream(chapter_id: int, db: Session = Depends(get_db)):
 
                 try:
                     ref_img = _effective_ref_image_path(chapter_id, db)
-                    image_path = await generate_manga_image(scene_prompt, chapter_id, i, all_scenes=scenes, character_profiles=_load_characters(chapter_id, db), ref_image_path=str(ref_img) if ref_img else None, color_mode=_load_color_mode(chapter_id))
+                    image_path = await generate_manga_image(scene_prompt, chapter_id, i, all_scenes=scenes, character_profiles=_load_characters(chapter_id, db), ref_image_path=str(ref_img) if ref_img else None, color_mode=_load_color_mode(chapter_id, db))
                 except Exception as img_err:
                     yield {
                         "event": "error",
@@ -853,7 +873,7 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
     chapter = db.get(Chapter, chapter_id)
     if not chapter:
         raise HTTPException(404, "Chapter not found")
-    image_count = _load_image_count(chapter_id)
+    image_count = _load_image_count(chapter_id, db)
     if image_number < 1 or image_number > image_count:
         raise HTTPException(400, f"image_number must be 1-{image_count}")
 
@@ -861,21 +881,12 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
     if not prompt:
         raise HTTPException(400, "prompt is required")
 
-    # Load all scenes for context
-    import re as _re
-    prompts_file = Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}" / "scenes.txt"
-    all_scenes = None
-    if prompts_file.exists():
-        raw = prompts_file.read_text(encoding="utf-8")
-        parts = _re.split(r"=== 第\d+格 ===\n", raw)
-        parts = [p.strip() for p in parts if p.strip()]
-        if len(parts) == image_count:
-            # Update the scene in file
-            parts[image_number - 1] = prompt
-            all_scenes = parts
-            with open(prompts_file, "w", encoding="utf-8") as f:
-                for idx, s in enumerate(parts, 1):
-                    f.write(f"=== 第{idx}格 ===\n{s}\n\n")
+    all_scenes = _parse_scenes_text(chapter.scenes_text)
+    if len(all_scenes) == image_count:
+        all_scenes[image_number - 1] = prompt
+        _save_chapter_scenes(chapter, all_scenes)
+    else:
+        all_scenes = None
 
     # Keep old DB/file intact until the new image is generated successfully.
     old_img = db.query(MangaImage).filter(
@@ -886,7 +897,7 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
 
     # Generate new image
     ref_img = _effective_ref_image_path(chapter_id, db)
-    image_path = await generate_manga_image(prompt, chapter_id, image_number, all_scenes=all_scenes, character_profiles=_load_characters(chapter_id, db), ref_image_path=str(ref_img) if ref_img else None, color_mode=_load_color_mode(chapter_id))
+    image_path = await generate_manga_image(prompt, chapter_id, image_number, all_scenes=all_scenes, character_profiles=_load_characters(chapter_id, db), ref_image_path=str(ref_img) if ref_img else None, color_mode=_load_color_mode(chapter_id, db))
 
     if old_img:
         manga = old_img

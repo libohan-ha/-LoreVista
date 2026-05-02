@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 from typing import Optional
+from pathlib import Path
 
 from pydantic import BaseModel, model_validator
 
@@ -22,6 +23,7 @@ class StoryOut(BaseModel):
     title: str
     description: Optional[str] = ""
     cover_image: Optional[str] = None
+    ref_image: Optional[str] = None
     has_character_profiles: bool = False
     has_ref_image: bool = False
     created_at: datetime.datetime
@@ -33,14 +35,10 @@ class StoryOut(BaseModel):
     def _extract_computed_flags(cls, data):
         if hasattr(data, 'character_profiles'):
             cp = getattr(data, 'character_profiles', '') or ''
+            ref_image = getattr(data, 'ref_image', '') or ''
             d = dict(data.__dict__) if hasattr(data, '__dict__') else dict(data)
             d['has_character_profiles'] = bool(cp.strip())
-            # Check for story-level ref image on disk
-            from pathlib import Path
-            story_id = getattr(data, 'id', None)
-            if story_id:
-                ref_path = Path(__file__).resolve().parent / "manga_outputs" / f"story_{story_id}" / "ref_image.png"
-                d['has_ref_image'] = ref_path.exists()
+            d['has_ref_image'] = bool(ref_image and (Path(__file__).resolve().parent / ref_image).exists())
             return d
         return data
 
