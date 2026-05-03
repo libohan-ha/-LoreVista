@@ -21,11 +21,12 @@ import {
   coverImageUrl,
   getStoryCharacters,
   saveStoryCharacters,
-  getStoryRefImage,
-  uploadStoryRefImage,
+  getStoryRefImages,
+  addStoryRefImage,
   deleteStoryRefImage,
-  storyRefImageUrl,
+  refImageUrl,
   type Story,
+  type RefImage,
 } from '../api';
 
 interface Props {
@@ -57,9 +58,10 @@ export default function HomePage({ onSelectStory }: Props) {
   const [storyCharFlags, setStoryCharFlags] = useState<Record<number, boolean>>({});
   const charModalRequestRef = useRef(0);
 
-  // Ref image modal
+  // Ref images modal (multi)
   const [refModalStoryId, setRefModalStoryId] = useState<number | null>(null);
-  const [refModalHasImage, setRefModalHasImage] = useState(false);
+  const [refModalImages, setRefModalImages] = useState<RefImage[]>([]);
+  const [refModalMax, setRefModalMax] = useState(4);
   const [refModalLoading, setRefModalLoading] = useState(false);
   const [refModalUploading, setRefModalUploading] = useState(false);
   const [storyRefFlags, setStoryRefFlags] = useState<Record<number, boolean>>({});
@@ -101,15 +103,17 @@ export default function HomePage({ onSelectStory }: Props) {
   const openRefModal = async (storyId: number) => {
     const requestId = ++refModalRequestRef.current;
     setRefModalStoryId(storyId);
-    setRefModalHasImage(false);
+    setRefModalImages([]);
     setRefModalLoading(true);
     try {
-      const r = await getStoryRefImage(storyId);
+      const r = await getStoryRefImages(storyId);
       if (refModalRequestRef.current !== requestId) return;
-      setRefModalHasImage(r.has_ref);
+      setRefModalImages(r.images);
+      setRefModalMax(r.max);
+      setStoryRefFlags((prev) => ({ ...prev, [storyId]: r.images.length > 0 }));
     } catch {
       if (refModalRequestRef.current !== requestId) return;
-      setRefModalHasImage(false);
+      setRefModalImages([]);
     } finally {
       if (refModalRequestRef.current !== requestId) return;
       setRefModalLoading(false);
@@ -125,9 +129,10 @@ export default function HomePage({ onSelectStory }: Props) {
         reader.onload = () => resolve((reader.result as string).split(',')[1]);
         reader.readAsDataURL(file);
       });
-      await uploadStoryRefImage(refModalStoryId, b64);
-      setRefModalHasImage(true);
-      setStoryRefFlags((prev) => ({ ...prev, [refModalStoryId]: true }));
+      const r = await addStoryRefImage(refModalStoryId, b64);
+      setRefModalImages(r.images);
+      setRefModalMax(r.max);
+      setStoryRefFlags((prev) => ({ ...prev, [refModalStoryId]: r.images.length > 0 }));
     } catch (err: any) {
       alert(`上传垫图失败: ${err.message}`);
     } finally {
@@ -135,12 +140,12 @@ export default function HomePage({ onSelectStory }: Props) {
     }
   };
 
-  const handleRefDelete = async () => {
+  const handleRefDelete = async (filename: string) => {
     if (refModalStoryId === null) return;
     try {
-      await deleteStoryRefImage(refModalStoryId);
-      setRefModalHasImage(false);
-      setStoryRefFlags((prev) => ({ ...prev, [refModalStoryId]: false }));
+      const r = await deleteStoryRefImage(refModalStoryId, filename);
+      setRefModalImages(r.images);
+      setStoryRefFlags((prev) => ({ ...prev, [refModalStoryId]: r.images.length > 0 }));
     } catch (err: any) {
       alert(`删除垫图失败: ${err.message}`);
     }
@@ -216,7 +221,7 @@ export default function HomePage({ onSelectStory }: Props) {
         const b64 = (reader.result as string).split(',')[1];
         const coverPath = await uploadStoryCover(storyId, b64);
         setStories((prev) =>
-          prev.map((s) => (s.id === storyId ? { ...s, cover_image: coverPath } : s)),
+          prev.map((s) => (s.id === storyId ? { ...s, cover_image: coverPath } : s))
         );
       } catch (err: any) {
         alert(`上传封面失败: ${err.message}`);
@@ -516,8 +521,8 @@ export default function HomePage({ onSelectStory }: Props) {
                     placeholder={`角色名：塞蕾娜\n性别：女\n发色与发型：银灰色长发…\n\n角色名：艾伦\n性别：男\n…`}
                     autoFocus
                   />
-                </>)
-              }
+                </>
+              )}
             </div>
             <div className="flex justify-end gap-2 px-5 py-3 border-t border-gray-800">
               <button
@@ -539,14 +544,23 @@ export default function HomePage({ onSelectStory }: Props) {
         </div>
       )}
 
-      {/* Ref image modal */}
+      {/* Ref images modal (multi) */}
       {refModalStoryId !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4">
-          <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md shadow-2xl flex flex-col">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4"
+          onClick={() => setRefModalStoryId(null)}
+        >
+          <div
+            className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-2xl shadow-2xl flex flex-col max-h-[85vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
               <h3 className="text-sm font-semibold flex items-center gap-2">
                 <ImagePlus size={16} className="text-amber-400" />
                 全局默认垫图
+                <span className="text-xs font-normal text-gray-500">
+                  {refModalImages.length}/{refModalMax} 张
+                </span>
               </h3>
               <button
                 onClick={() => setRefModalStoryId(null)}
@@ -555,60 +569,55 @@ export default function HomePage({ onSelectStory }: Props) {
                 <X size={16} />
               </button>
             </div>
-            <div className="px-5 py-4">
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              <p className="text-xs text-gray-500 mb-4 leading-relaxed">
+                上传默认垫图（最多 {refModalMax} 张），所有章节默认继承，用作人物外貌和画面参考。章节内也可单独覆盖。
+              </p>
               {refModalLoading ? (
                 <div className="flex items-center justify-center py-12 text-gray-500">
                   <Loader2 size={24} className="animate-spin" />
                 </div>
-              ) : refModalHasImage ? (
-                <div className="space-y-3">
-                  <p className="text-xs text-gray-500">
-                    已设定默认垫图，所有章节默认继承，用作人物外貌和画面参考。章节内也可单独覆盖。
-                  </p>
-                  <div className="relative rounded-lg overflow-hidden border border-gray-700">
-                    <img
-                      src={`${storyRefImageUrl(refModalStoryId)}?t=${Date.now()}`}
-                      alt="默认垫图"
-                      className="w-full max-h-64 object-contain bg-gray-800"
-                    />
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => refModalFileRef.current?.click()}
-                      disabled={refModalUploading}
-                      className="flex-1 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium
-                                 rounded-lg transition-colors disabled:opacity-40"
-                    >
-                      {refModalUploading ? '上传中…' : '更换垫图'}
-                    </button>
-                    <button
-                      onClick={handleRefDelete}
-                      className="px-4 py-2 text-red-400 hover:text-red-300 hover:bg-red-900/20 text-sm font-medium
-                                 rounded-lg transition-colors"
-                    >
-                      删除
-                    </button>
-                  </div>
-                </div>
+              ) : refModalImages.length === 0 ? (
+                <button
+                  onClick={() => refModalFileRef.current?.click()}
+                  disabled={refModalUploading}
+                  className="w-full flex flex-col items-center justify-center py-12 border-2 border-dashed border-gray-700
+                             hover:border-amber-500/50 rounded-lg text-gray-500 hover:text-gray-400 transition-colors
+                             disabled:opacity-40 cursor-pointer"
+                >
+                  {refModalUploading ? (
+                    <Loader2 size={28} className="animate-spin mb-2" />
+                  ) : (
+                    <ImagePlus size={28} className="mb-2" />
+                  )}
+                  <span className="text-sm">{refModalUploading ? '上传中…' : '点击上传第一张垫图'}</span>
+                </button>
               ) : (
-                <div className="space-y-3">
-                  <p className="text-xs text-gray-500">
-                    设定默认垫图后，所有章节生成漫画时将使用此图作为人物外貌和画面参考。章节内也可单独覆盖。
-                  </p>
-                  <button
-                    onClick={() => refModalFileRef.current?.click()}
-                    disabled={refModalUploading}
-                    className="w-full flex flex-col items-center justify-center py-10 border-2 border-dashed border-gray-700
-                               hover:border-amber-500/50 rounded-lg text-gray-500 hover:text-gray-400 transition-colors
-                               disabled:opacity-40 cursor-pointer"
-                  >
-                    {refModalUploading ? (
-                      <Loader2 size={28} className="animate-spin mb-2" />
-                    ) : (
-                      <ImagePlus size={28} className="mb-2" />
-                    )}
-                    <span className="text-sm">{refModalUploading ? '上传中…' : '点击上传垫图'}</span>
-                  </button>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {refModalImages.map((img) => (
+                    <div
+                      key={img.filename}
+                      className="relative group aspect-square rounded-lg overflow-hidden border border-gray-700 bg-gray-950"
+                    >
+                      <img
+                        src={`${refImageUrl(img.image_path)}?t=${Date.now()}`}
+                        alt={img.filename}
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-end p-2 pointer-events-none">
+                        <span className="text-[10px] text-white/80 bg-black/60 px-1.5 py-0.5 rounded">
+                          {img.size_kb} KB
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => handleRefDelete(img.filename)}
+                        className="absolute top-1.5 right-1.5 p-1 rounded-md bg-red-600/80 hover:bg-red-500 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="删除"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
               <input
@@ -623,7 +632,18 @@ export default function HomePage({ onSelectStory }: Props) {
                 }}
               />
             </div>
-            <div className="flex justify-end px-5 py-3 border-t border-gray-800">
+            <div className="flex justify-between items-center px-5 py-3 border-t border-gray-800">
+              <button
+                onClick={() => refModalFileRef.current?.click()}
+                disabled={refModalUploading || refModalImages.length >= refModalMax}
+                className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg
+                           bg-violet-600 hover:bg-violet-500 text-white
+                           disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                title={refModalImages.length >= refModalMax ? `已达上限 ${refModalMax} 张` : '上传一张垫图'}
+              >
+                {refModalUploading ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
+                {refModalImages.length === 0 ? '上传垫图' : '添加一张'}
+              </button>
               <button
                 onClick={() => setRefModalStoryId(null)}
                 className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 transition-colors"

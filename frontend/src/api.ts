@@ -284,57 +284,76 @@ export async function resetChapterCharacters(chapterId: number): Promise<void> {
   if (!res.ok) throw new Error(await res.text());
 }
 
-// ─── Reference Image (垫图) ─────────────────────────────────
+// ─── Reference Images (垫图，支持多图) ────────────────────────
 
-// Story-level ref image
-export async function getStoryRefImage(storyId: number): Promise<{ has_ref: boolean; size_kb?: number; image_path?: string }> {
-  const res = await fetch(`${BASE}/api/stories/${storyId}/ref-image`, { headers: apiHeaders() });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+export type RefSource = 'chapter' | 'story' | 'none';
+
+export interface RefImage {
+  filename: string;
+  image_path: string;
+  size_kb: number;
 }
 
-export async function uploadStoryRefImage(storyId: number, base64: string): Promise<void> {
-  const res = await fetch(`${BASE}/api/stories/${storyId}/ref-image`, {
-    method: 'POST',
-    headers: apiHeaders(true),
-    body: JSON.stringify({ image: base64 }),
-  });
-  if (!res.ok) throw new Error(await res.text());
+export interface RefImagesPayload {
+  images: RefImage[];
+  max: number;
+  source?: RefSource;
 }
 
-export async function deleteStoryRefImage(storyId: number): Promise<void> {
-  const res = await fetch(`${BASE}/api/stories/${storyId}/ref-image`, { method: 'DELETE', headers: apiHeaders() });
-  if (!res.ok) throw new Error(await res.text());
-}
-
-export function storyRefImageUrl(storyIdOrPath: number | string): string {
-  const imagePath = typeof storyIdOrPath === 'number'
-    ? `manga_outputs/story_${storyIdOrPath}/ref_image.png`
-    : storyIdOrPath;
+export function refImageUrl(imagePath: string): string {
   return `${BASE}/static/manga/${imagePath.replace('manga_outputs/', '')}`;
 }
 
-// Chapter-level ref image (with fallback info)
-export type RefSource = 'chapter' | 'story' | 'none';
-
-export async function getRefImage(chapterId: number): Promise<{ has_ref: boolean; source: RefSource; size_kb?: number }> {
-  const res = await fetch(`${BASE}/api/chapters/${chapterId}/ref-image`, { headers: apiHeaders() });
+// Story-level
+export async function getStoryRefImages(storyId: number): Promise<RefImagesPayload> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/ref-images`, { headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-export async function uploadRefImage(chapterId: number, base64: string): Promise<void> {
-  const res = await fetch(`${BASE}/api/chapters/${chapterId}/ref-image`, {
+export async function addStoryRefImage(storyId: number, base64: string): Promise<RefImagesPayload> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/ref-images`, {
     method: 'POST',
     headers: apiHeaders(true),
     body: JSON.stringify({ image: base64 }),
   });
   if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
-export async function deleteRefImage(chapterId: number): Promise<void> {
-  const res = await fetch(`${BASE}/api/chapters/${chapterId}/ref-image`, { method: 'DELETE', headers: apiHeaders() });
+export async function deleteStoryRefImage(storyId: number, filename: string): Promise<RefImagesPayload> {
+  const res = await fetch(
+    `${BASE}/api/stories/${storyId}/ref-images/${encodeURIComponent(filename)}`,
+    { method: 'DELETE', headers: apiHeaders() },
+  );
   if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// Chapter-level (with story fallback)
+export async function getChapterRefImages(chapterId: number): Promise<RefImagesPayload> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/ref-images`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function addChapterRefImage(chapterId: number, base64: string): Promise<RefImagesPayload> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/ref-images`, {
+    method: 'POST',
+    headers: apiHeaders(true),
+    body: JSON.stringify({ image: base64 }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteChapterRefImage(chapterId: number, filename: string): Promise<RefImagesPayload> {
+  const res = await fetch(
+    `${BASE}/api/chapters/${chapterId}/ref-images/${encodeURIComponent(filename)}`,
+    { method: 'DELETE', headers: apiHeaders() },
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 // ─── Color Mode ─────────────────────────────────────────────

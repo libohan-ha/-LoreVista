@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import shutil
+import uuid
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -556,22 +557,41 @@ async def reset_chapter_characters(chapter_id: int, db: Session = Depends(get_db
     return {"ok": True}
 
 
-# ─── Reference Image (垫图) ─────────────────────────────────
+# ─── Reference Image (垫图，支持多图) ──────────────────────────
 
-def _story_ref_image_path(story_id: int) -> Path:
+MAX_REF_IMAGES_PER_LEVEL = int(os.getenv("MAX_REF_IMAGES_PER_LEVEL", "4"))
+
+
+def _story_ref_dir(story_id: int) -> Path:
+    return Path(__file__).resolve().parent / "manga_outputs" / f"story_{story_id}" / "ref_images"
+
+
+def _chapter_ref_dir(chapter_id: int) -> Path:
+    return Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}" / "ref_images"
+
+
+def _legacy_story_ref_image(story_id: int) -> Path:
+    """Old single-file location, kept for backward compat / lazy migration."""
     return Path(__file__).resolve().parent / "manga_outputs" / f"story_{story_id}" / "ref_image.png"
 
 
-def _chapter_ref_image_path(chapter_id: int) -> Path:
+def _legacy_chapter_ref_image(chapter_id: int) -> Path:
     return Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}" / "ref_image.png"
 
 
-def _story_ref_image_static_path(story_id: int) -> str:
-    return f"manga_outputs/story_{story_id}/ref_image.png"
-
-
-def _chapter_ref_image_static_path(chapter_id: int) -> str:
-    return f"manga_outputs/chapter_{chapter_id}/ref_image.png"
+def _migrate_legacy_ref(legacy: Path, ref_dir: Path) -> None:
+    """Move legacy single ref_image.png into ref_images/ as ref_legacy.png on demand."""
+    if not legacy.exists():
+        return
+    try:
+        ref_dir.mkdir(parents=True, exist_ok=True)
+        target = ref_dir / "ref_legacy.png"
+        if target.exists():
+            target = ref_dir / f"ref_legacy_{uuid.uuid4().hex[:8]}.png"
+        legacy.rename(target)
+        logger.info("Migrated legacy ref image %s -> %s", legacy, target)
+    except OSError as exc:
+        logger.warning("Failed to migrate legacy ref image %s: %s", legacy, exc)
 
 
 def _story_ref_image_db_path(story: Story) -> Path | None:
@@ -588,96 +608,176 @@ def _chapter_ref_image_db_path(chapter: Chapter) -> Path | None:
     return p if p.exists() else None
 
 
-def _effective_ref_image_path(chapter_id: int, db: Session) -> Path | None:
-    """Return the effective ref image path: chapter-level first, then story-level fallback."""
+def _list_ref_files(ref_dir: Path) -> list[Path]:
+    if not ref_dir.exists():
+        return []
+    return sorted([p for p in ref_dir.iterdir() if p.is_file() and p.suffix.lower() == ".png"])
+
+
+def _ref_static_path(ref_dir: Path, filename: str, kind: str, owner_id: int) -> str:
+    """Build the static URL-relative path for a ref image."""
+    if kind == "story":
+        return f"manga_outputs/story_{owner_id}/ref_images/{filename}"
+    return f"manga_outputs/chapter_{owner_id}/ref_images/{filename}"
+
+
+def _serialize_refs(ref_dir: Path, kind: str, owner_id: int) -> list[dict]:
+    out = []
+    for p in _list_ref_files(ref_dir):
+        out.append({
+            "filename": p.name,
+            "image_path": _ref_static_path(ref_dir, p.name, kind, owner_id),
+            "size_kb": round(p.stat().st_size / 1024),
+        })
+    return out
+
+
+def _effective_ref_image_paths(chapter_id: int, db: Session) -> list[Path]:
+    """Return the effective ref image list: chapter-level first, else story-level fallback."""
+    chapter_dir = _chapter_ref_dir(chapter_id)
+    _migrate_legacy_ref(_legacy_chapter_ref_image(chapter_id), chapter_dir)
+    chapter_refs = _list_ref_files(chapter_dir)
+    if chapter_refs:
+        return chapter_refs
     chapter = db.get(Chapter, chapter_id)
     if chapter:
         cp = _chapter_ref_image_db_path(chapter)
         if cp:
-            return cp
-    if chapter and chapter.story:
-        return _story_ref_image_db_path(chapter.story)
-    return None
+            return [cp]
+        story_dir = _story_ref_dir(chapter.story_id)
+        _migrate_legacy_ref(_legacy_story_ref_image(chapter.story_id), story_dir)
+        story_refs = _list_ref_files(story_dir)
+        if story_refs:
+            return story_refs
+        if chapter.story:
+            sp = _story_ref_image_db_path(chapter.story)
+            if sp:
+                return [sp]
+    return []
 
 
-# Story-level ref image
-@app.get("/api/stories/{story_id}/ref-image")
-async def get_story_ref_image(story_id: int, db: Session = Depends(get_db)):
+def _save_uploaded_ref(ref_dir: Path, img_bytes: bytes, label: str) -> str:
+    if len(_list_ref_files(ref_dir)) >= MAX_REF_IMAGES_PER_LEVEL:
+        raise HTTPException(409, f"Maximum {MAX_REF_IMAGES_PER_LEVEL} reference images allowed")
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"ref_{uuid.uuid4().hex[:8]}.png"
+    _write_bytes_or_conflict(ref_dir / filename, img_bytes, label)
+    return filename
+
+
+# ─── Story-level multi ref images ───────────────────────────
+
+@app.get("/api/stories/{story_id}/ref-images")
+async def list_story_ref_images(story_id: int, db: Session = Depends(get_db)):
     story = db.get(Story, story_id)
     if not story:
         raise HTTPException(404, "Story not found")
-    p = _story_ref_image_db_path(story)
-    if p:
-        return {"has_ref": True, "size_kb": round(p.stat().st_size / 1024), "image_path": story.ref_image}
-    return {"has_ref": False}
+    ref_dir = _story_ref_dir(story_id)
+    _migrate_legacy_ref(_legacy_story_ref_image(story_id), ref_dir)
+    images = _serialize_refs(ref_dir, "story", story_id)
+    db_ref = _story_ref_image_db_path(story)
+    if db_ref:
+        images.insert(0, {
+            "filename": Path(story.ref_image or db_ref.name).name,
+            "image_path": story.ref_image,
+            "size_kb": round(db_ref.stat().st_size / 1024),
+        })
+    return {"images": images, "max": MAX_REF_IMAGES_PER_LEVEL}
 
 
-@app.post("/api/stories/{story_id}/ref-image")
-async def upload_story_ref_image(story_id: int, request: Request, db: Session = Depends(get_db)):
+@app.post("/api/stories/{story_id}/ref-images")
+async def add_story_ref_image(story_id: int, request: Request, db: Session = Depends(get_db)):
     story = db.get(Story, story_id)
     if not story:
         raise HTTPException(404, "Story not found")
     body = await request.json()
-    b64 = body.get("image", "")
-    img_bytes = _decode_png_upload(b64)
-    p = _story_ref_image_path(story_id)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    _write_bytes_or_conflict(p, img_bytes, "story ref image")
-    story.ref_image = _story_ref_image_static_path(story_id)
-    db.commit()
-    return {"ok": True, "size_kb": round(len(img_bytes) / 1024), "image_path": story.ref_image}
+    img_bytes = _decode_png_upload(body.get("image", ""))
+    ref_dir = _story_ref_dir(story_id)
+    _migrate_legacy_ref(_legacy_story_ref_image(story_id), ref_dir)
+    _save_uploaded_ref(ref_dir, img_bytes, "story ref image")
+    return {"images": _serialize_refs(ref_dir, "story", story_id), "max": MAX_REF_IMAGES_PER_LEVEL}
 
 
-@app.delete("/api/stories/{story_id}/ref-image")
-async def delete_story_ref_image(story_id: int, db: Session = Depends(get_db)):
+@app.delete("/api/stories/{story_id}/ref-images/{filename}")
+async def delete_story_ref_image(story_id: int, filename: str, db: Session = Depends(get_db)):
     story = db.get(Story, story_id)
     if not story:
         raise HTTPException(404, "Story not found")
-    p = _story_ref_image_db_path(story) or _story_ref_image_path(story_id)
-    if p.exists():
-        _unlink_file(p, "story ref image")
-    story.ref_image = None
-    db.commit()
-    return {"ok": True}
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(400, "invalid filename")
+    if story.ref_image and Path(story.ref_image).name == filename:
+        p = _story_ref_image_db_path(story)
+        if p and p.exists():
+            _unlink_file(p, "story ref image")
+        story.ref_image = None
+        db.commit()
+        ref_dir = _story_ref_dir(story_id)
+        return {"images": _serialize_refs(ref_dir, "story", story_id), "max": MAX_REF_IMAGES_PER_LEVEL}
+    p = _story_ref_dir(story_id) / filename
+    _unlink_file(p, "story ref image")
+    return {"images": _serialize_refs(_story_ref_dir(story_id), "story", story_id), "max": MAX_REF_IMAGES_PER_LEVEL}
 
 
-# Chapter-level ref image (with fallback)
-@app.get("/api/chapters/{chapter_id}/ref-image")
-async def get_ref_image(chapter_id: int, db: Session = Depends(get_db)):
+# ─── Chapter-level multi ref images (with story fallback) ───
+
+@app.get("/api/chapters/{chapter_id}/ref-images")
+async def list_chapter_ref_images(chapter_id: int, db: Session = Depends(get_db)):
     chapter = _require_chapter(chapter_id, db)
+    ref_dir = _chapter_ref_dir(chapter_id)
+    _migrate_legacy_ref(_legacy_chapter_ref_image(chapter_id), ref_dir)
+    chapter_refs = _serialize_refs(ref_dir, "chapter", chapter_id)
     cp = _chapter_ref_image_db_path(chapter)
     if cp:
-        return {"has_ref": True, "source": "chapter", "size_kb": round(cp.stat().st_size / 1024)}
-    sp = _story_ref_image_db_path(chapter.story)
-    if sp:
-        return {"has_ref": True, "source": "story", "size_kb": round(sp.stat().st_size / 1024)}
-    return {"has_ref": False, "source": "none"}
+        chapter_refs.insert(0, {
+            "filename": Path(chapter.ref_image or cp.name).name,
+            "image_path": chapter.ref_image,
+            "size_kb": round(cp.stat().st_size / 1024),
+        })
+    if chapter_refs:
+        return {"images": chapter_refs, "source": "chapter", "max": MAX_REF_IMAGES_PER_LEVEL}
+    story_dir = _story_ref_dir(chapter.story_id)
+    _migrate_legacy_ref(_legacy_story_ref_image(chapter.story_id), story_dir)
+    story_refs = _serialize_refs(story_dir, "story", chapter.story_id)
+    if chapter.story:
+        sp = _story_ref_image_db_path(chapter.story)
+        if sp:
+            story_refs.insert(0, {
+                "filename": Path(chapter.story.ref_image or sp.name).name,
+                "image_path": chapter.story.ref_image,
+                "size_kb": round(sp.stat().st_size / 1024),
+            })
+    if story_refs:
+        return {"images": story_refs, "source": "story", "max": MAX_REF_IMAGES_PER_LEVEL}
+    return {"images": [], "source": "none", "max": MAX_REF_IMAGES_PER_LEVEL}
 
 
-@app.post("/api/chapters/{chapter_id}/ref-image")
-async def upload_ref_image(chapter_id: int, request: Request, db: Session = Depends(get_db)):
-    chapter = _require_chapter(chapter_id, db)
+@app.post("/api/chapters/{chapter_id}/ref-images")
+async def add_chapter_ref_image(chapter_id: int, request: Request, db: Session = Depends(get_db)):
+    _require_chapter(chapter_id, db)
     body = await request.json()
-    b64 = body.get("image", "")
-    img_bytes = _decode_png_upload(b64)
-    p = _chapter_ref_image_path(chapter_id)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    _write_bytes_or_conflict(p, img_bytes, "chapter ref image")
-    chapter.ref_image = _chapter_ref_image_static_path(chapter_id)
-    db.commit()
-    return {"ok": True, "size_kb": round(len(img_bytes) / 1024)}
+    img_bytes = _decode_png_upload(body.get("image", ""))
+    ref_dir = _chapter_ref_dir(chapter_id)
+    _migrate_legacy_ref(_legacy_chapter_ref_image(chapter_id), ref_dir)
+    _save_uploaded_ref(ref_dir, img_bytes, "chapter ref image")
+    return {"images": _serialize_refs(ref_dir, "chapter", chapter_id), "source": "chapter", "max": MAX_REF_IMAGES_PER_LEVEL}
 
 
-@app.delete("/api/chapters/{chapter_id}/ref-image")
-async def delete_ref_image(chapter_id: int, db: Session = Depends(get_db)):
-    """Delete chapter-level ref image override so it falls back to story-level."""
+@app.delete("/api/chapters/{chapter_id}/ref-images/{filename}")
+async def delete_chapter_ref_image(chapter_id: int, filename: str, db: Session = Depends(get_db)):
+    _require_chapter(chapter_id, db)
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(400, "invalid filename")
     chapter = _require_chapter(chapter_id, db)
-    p = _chapter_ref_image_db_path(chapter) or _chapter_ref_image_path(chapter_id)
-    if p.exists():
-        _unlink_file(p, "chapter ref image")
-    chapter.ref_image = None
-    db.commit()
-    return {"ok": True}
+    if chapter.ref_image and Path(chapter.ref_image).name == filename:
+        p = _chapter_ref_image_db_path(chapter)
+        if p and p.exists():
+            _unlink_file(p, "chapter ref image")
+        chapter.ref_image = None
+        db.commit()
+        return {"images": _serialize_refs(_chapter_ref_dir(chapter_id), "chapter", chapter_id), "source": "chapter", "max": MAX_REF_IMAGES_PER_LEVEL}
+    p = _chapter_ref_dir(chapter_id) / filename
+    _unlink_file(p, "chapter ref image")
+    return {"images": _serialize_refs(_chapter_ref_dir(chapter_id), "chapter", chapter_id), "source": "chapter", "max": MAX_REF_IMAGES_PER_LEVEL}
 
 
 # ─── Color Mode ─────────────────────────────────────────────
@@ -892,8 +992,8 @@ async def generate_manga_stream(chapter_id: int, db: Session = Depends(get_db)):
                 }
 
                 try:
-                    ref_img = _effective_ref_image_path(chapter_id, db)
-                    image_path = await generate_manga_image(scene_prompt, chapter_id, i, all_scenes=scenes, character_profiles=_load_characters(chapter_id, db), ref_image_path=str(ref_img) if ref_img else None, color_mode=_load_color_mode(chapter_id, db))
+                    ref_imgs = _effective_ref_image_paths(chapter_id, db)
+                    image_path = await generate_manga_image(scene_prompt, chapter_id, i, all_scenes=scenes, character_profiles=_load_characters(chapter_id, db), ref_image_paths=[str(p) for p in ref_imgs] if ref_imgs else None, color_mode=_load_color_mode(chapter_id, db))
                 except Exception as img_err:
                     yield {
                         "event": "error",
@@ -960,8 +1060,8 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
     old_path = Path(__file__).resolve().parent / old_img.image_path if old_img else None
 
     # Generate new image
-    ref_img = _effective_ref_image_path(chapter_id, db)
-    image_path = await generate_manga_image(prompt, chapter_id, image_number, all_scenes=all_scenes, character_profiles=_load_characters(chapter_id, db), ref_image_path=str(ref_img) if ref_img else None, color_mode=_load_color_mode(chapter_id, db))
+    ref_imgs = _effective_ref_image_paths(chapter_id, db)
+    image_path = await generate_manga_image(prompt, chapter_id, image_number, all_scenes=all_scenes, character_profiles=_load_characters(chapter_id, db), ref_image_paths=[str(p) for p in ref_imgs] if ref_imgs else None, color_mode=_load_color_mode(chapter_id, db))
 
     if old_img:
         manga = old_img
