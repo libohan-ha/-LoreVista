@@ -577,13 +577,17 @@ def _legacy_chapter_ref_image(chapter_id: int) -> Path:
 
 def _migrate_legacy_ref(legacy: Path, ref_dir: Path) -> None:
     """Move legacy single ref_image.png into ref_images/ as ref_legacy.png on demand."""
-    if legacy.exists() and not ref_dir.exists():
-        try:
-            ref_dir.mkdir(parents=True, exist_ok=True)
-            legacy.rename(ref_dir / "ref_legacy.png")
-            logger.info("Migrated legacy ref image %s → %s", legacy, ref_dir)
-        except OSError as exc:
-            logger.warning("Failed to migrate legacy ref image %s: %s", legacy, exc)
+    if not legacy.exists():
+        return
+    try:
+        ref_dir.mkdir(parents=True, exist_ok=True)
+        target = ref_dir / "ref_legacy.png"
+        if target.exists():
+            target = ref_dir / f"ref_legacy_{uuid.uuid4().hex[:8]}.png"
+        legacy.rename(target)
+        logger.info("Migrated legacy ref image %s -> %s", legacy, target)
+    except OSError as exc:
+        logger.warning("Failed to migrate legacy ref image %s: %s", legacy, exc)
 
 
 def _list_ref_files(ref_dir: Path) -> list[Path]:

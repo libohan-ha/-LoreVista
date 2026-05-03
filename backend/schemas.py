@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel, model_validator
@@ -36,11 +37,15 @@ class StoryOut(BaseModel):
             d = dict(data.__dict__) if hasattr(data, '__dict__') else dict(data)
             d['has_character_profiles'] = bool(cp.strip())
             # Check for story-level ref image on disk
-            from pathlib import Path
             story_id = getattr(data, 'id', None)
             if story_id:
-                ref_path = Path(__file__).resolve().parent / "manga_outputs" / f"story_{story_id}" / "ref_image.png"
-                d['has_ref_image'] = ref_path.exists()
+                story_dir = Path(__file__).resolve().parent / "manga_outputs" / f"story_{story_id}"
+                ref_dir = story_dir / "ref_images"
+                has_multi_ref = ref_dir.exists() and any(
+                    p.is_file() and p.suffix.lower() == ".png"
+                    for p in ref_dir.iterdir()
+                )
+                d['has_ref_image'] = has_multi_ref or (story_dir / "ref_image.png").exists()
             return d
         return data
 

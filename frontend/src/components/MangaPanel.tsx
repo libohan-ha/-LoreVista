@@ -150,6 +150,19 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     : images.length > 0
       ? images
       : existingImages;
+  const imageByNumber = new Map(displayImages.map((img) => [img.image_number, img]));
+  const imageIndexByNumber = new Map(displayImages.map((img, idx) => [img.image_number, idx]));
+  const gallerySlots = scenes.length > 0
+    ? scenes.map((scene, idx) => ({
+      image_number: idx + 1,
+      scene,
+      img: imageByNumber.get(idx + 1),
+    }))
+    : displayImages.map((img) => ({
+      image_number: img.image_number,
+      scene: img.prompt || '',
+      img,
+    }));
   const lightboxImg = lightboxIdx >= 0 ? displayImages[lightboxIdx] : null;
 
   // ── Scene generation ──
@@ -783,26 +796,29 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
 
         {/* Images gallery with inline scene editor */}
         <div className="space-y-6">
-          {displayImages.map((img, idx) => {
-            const sceneIdx = img.image_number - 1;
-            const scene = scenes[sceneIdx] || '';
+          {gallerySlots.map(({ image_number, scene, img }) => {
+            const sceneIdx = image_number - 1;
             const isEditing = editingIdx === sceneIdx;
-            const isRegenerating = regenIdx === img.image_number;
+            const isRegenerating = regenIdx === image_number;
             return (
-              <div key={img.image_number} className="group">
+              <div key={image_number} className="group">
+                {img ? (
                 <div
                   className="relative rounded-xl overflow-hidden border border-gray-800 bg-gray-900 cursor-pointer
                              hover:border-gray-600 transition-colors"
-                  onClick={() => setLightboxIdx(idx)}
+                  onClick={() => {
+                    const idx = imageIndexByNumber.get(image_number);
+                    if (idx !== undefined) setLightboxIdx(idx);
+                  }}
                 >
                   <img
                     src={mangaImageUrl(img.image_path, isRegenerating ? Date.now() : undefined)}
-                    alt={`Panel ${img.image_number}`}
+                    alt={`Panel ${image_number}`}
                     className={`w-full object-contain ${isRegenerating ? 'opacity-30' : ''}`}
                     loading="lazy"
                   />
                   <div className="absolute top-3 left-3 px-2 py-0.5 bg-black/70 rounded text-[10px] text-gray-300 font-mono">
-                    {img.image_number}/{imageCount}
+                    {image_number}/{imageCount}
                   </div>
                   {isRegenerating && (
                     <div className="absolute inset-0 flex items-center justify-center">
@@ -818,6 +834,17 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                     </div>
                   )}
                 </div>
+                ) : (
+                <div className="relative rounded-xl overflow-hidden border border-dashed border-gray-800 bg-gray-900/45 h-64 flex items-center justify-center">
+                  <div className="absolute top-3 left-3 px-2 py-0.5 bg-black/50 rounded text-[10px] text-gray-400 font-mono">
+                    {image_number}/{imageCount}
+                  </div>
+                  <div className="flex flex-col items-center gap-2 text-gray-600">
+                    {generating ? <Loader2 size={24} className="animate-spin" /> : <ImageIcon size={28} strokeWidth={1.5} />}
+                    <span className="text-xs">{generating ? '等待生成…' : '未生成'}</span>
+                  </div>
+                </div>
+                )}
                 {/* Inline scene editor under image */}
                 {scene && (
                   <div className="mt-2 rounded-lg border border-gray-800 bg-gray-900/40 p-2.5">
@@ -846,7 +873,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                           <>
                             <button onClick={() => handleSceneEdit(sceneIdx)} className="p-1 rounded hover:bg-gray-700 text-gray-600 hover:text-gray-300 transition-colors" title="编辑分镜"><Pencil size={12} /></button>
                             <button
-                              onClick={() => handleRegenImage(img.image_number)}
+                              onClick={() => handleRegenImage(image_number)}
                               disabled={isRegenerating || generating}
                               className="p-1 rounded hover:bg-gray-700 text-gray-600 hover:text-amber-400 disabled:opacity-30 transition-colors"
                               title="重新生成此图"
@@ -865,7 +892,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
         </div>
 
         {/* Loading placeholders */}
-        {generating && displayImages.length < activeImageCount && (
+        {generating && scenes.length === 0 && displayImages.length < activeImageCount && (
           <div className="mt-6 space-y-6">
             {Array.from({ length: Math.max(activeImageCount - displayImages.length, 0) }, (_, i) => (
               <div
