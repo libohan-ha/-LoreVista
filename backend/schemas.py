@@ -3,7 +3,6 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 from typing import Optional
-from pathlib import Path
 
 from pydantic import BaseModel, model_validator
 
@@ -43,13 +42,16 @@ class StoryOut(BaseModel):
             has_db_ref = bool(ref_image and (Path(__file__).resolve().parent / ref_image).exists())
             story_id = getattr(data, 'id', None)
             has_multi_ref = False
+            has_legacy_ref = False
             if story_id:
-                ref_dir = Path(__file__).resolve().parent / "manga_outputs" / f"story_{story_id}" / "ref_images"
+                story_dir = Path(__file__).resolve().parent / "manga_outputs" / f"story_{story_id}"
+                ref_dir = story_dir / "ref_images"
                 has_multi_ref = ref_dir.exists() and any(
                     p.is_file() and p.suffix.lower() == ".png"
                     for p in ref_dir.iterdir()
                 )
-            d['has_ref_image'] = has_db_ref or has_multi_ref
+                has_legacy_ref = (story_dir / "ref_image.png").exists()
+            d['has_ref_image'] = has_db_ref or has_multi_ref or has_legacy_ref
             return d
         return data
 

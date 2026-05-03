@@ -632,6 +632,24 @@ def _serialize_refs(ref_dir: Path, kind: str, owner_id: int) -> list[dict]:
     return out
 
 
+def _db_ref_entry(db_ref: Path | None, image_path: str | None) -> dict | None:
+    if not db_ref or not image_path:
+        return None
+    return {
+        "filename": Path(image_path).name,
+        "image_path": image_path,
+        "size_kb": round(db_ref.stat().st_size / 1024),
+    }
+
+
+def _serialize_refs_with_db_ref(ref_dir: Path, kind: str, owner_id: int, db_ref: Path | None, image_path: str | None) -> list[dict]:
+    images = _serialize_refs(ref_dir, kind, owner_id)
+    entry = _db_ref_entry(db_ref, image_path)
+    if entry:
+        images.insert(0, entry)
+    return images
+
+
 def _effective_ref_image_paths(chapter_id: int, db: Session) -> list[Path]:
     """Return the effective ref image list: chapter-level first, else story-level fallback."""
     chapter_dir = _chapter_ref_dir(chapter_id)
@@ -656,8 +674,9 @@ def _effective_ref_image_paths(chapter_id: int, db: Session) -> list[Path]:
     return []
 
 
-def _save_uploaded_ref(ref_dir: Path, img_bytes: bytes, label: str) -> str:
-    if len(_list_ref_files(ref_dir)) >= MAX_REF_IMAGES_PER_LEVEL:
+def _save_uploaded_ref(ref_dir: Path, img_bytes: bytes, label: str, existing_count: int | None = None) -> str:
+    count = len(_list_ref_files(ref_dir)) if existing_count is None else existing_count
+    if count >= MAX_REF_IMAGES_PER_LEVEL:
         raise HTTPException(409, f"Maximum {MAX_REF_IMAGES_PER_LEVEL} reference images allowed")
     ref_dir.mkdir(parents=True, exist_ok=True)
     filename = f"ref_{uuid.uuid4().hex[:8]}.png"
@@ -674,14 +693,8 @@ async def list_story_ref_images(story_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Story not found")
     ref_dir = _story_ref_dir(story_id)
     _migrate_legacy_ref(_legacy_story_ref_image(story_id), ref_dir)
-    images = _serialize_refs(ref_dir, "story", story_id)
     db_ref = _story_ref_image_db_path(story)
-    if db_ref:
-        images.insert(0, {
-            "filename": Path(story.ref_image or db_ref.name).name,
-            "image_path": story.ref_image,
-            "size_kb": round(db_ref.stat().st_size / 1024),
-        })
+    images = _serialize_refs_with_db_ref(ref_dir, "story", story_id, db_ref, story.ref_image)
     return {"images": images, "max": MAX_REF_IMAGES_PER_LEVEL}
 
 
@@ -694,8 +707,10 @@ async def add_story_ref_image(story_id: int, request: Request, db: Session = Dep
     img_bytes = _decode_png_upload(body.get("image", ""))
     ref_dir = _story_ref_dir(story_id)
     _migrate_legacy_ref(_legacy_story_ref_image(story_id), ref_dir)
-    _save_uploaded_ref(ref_dir, img_bytes, "story ref image")
-    return {"images": _serialize_refs(ref_dir, "story", story_id), "max": MAX_REF_IMAGES_PER_LEVEL}
+    db_ref = _story_ref_image_db_path(story)
+    existing_count = len(_list_ref_files(ref_dir)) + (1 if db_ref else 0)
+    _save_uploaded_ref(ref_dir, img_bytes, "story ref image", existing_count=existing_count)
+    return {"images": _serialize_refs_with_db_ref(ref_dir, "story", story_id, db_ref, story.ref_image), "max": MAX_REF_IMAGES_PER_LEVEL}
 
 
 @app.delete("/api/stories/{story_id}/ref-images/{filename}")
@@ -715,7 +730,10 @@ async def delete_story_ref_image(story_id: int, filename: str, db: Session = Dep
         return {"images": _serialize_refs(ref_dir, "story", story_id), "max": MAX_REF_IMAGES_PER_LEVEL}
     p = _story_ref_dir(story_id) / filename
     _unlink_file(p, "story ref image")
-    return {"images": _serialize_refs(_story_ref_dir(story_id), "story", story_id), "max": MAX_REF_IMAGES_PER_LEVEL}
+    return {
+        "images": _serialize_refs_with_db_ref(_story_ref_dir(story_id), "story", story_id, _story_ref_image_db_path(story), story.ref_image),
+        "max": MAX_REF_IMAGES_PER_LEVEL,
+    }
 
 
 # ─── Chapter-level multi ref images (with story fallback) ───
@@ -725,27 +743,20 @@ async def list_chapter_ref_images(chapter_id: int, db: Session = Depends(get_db)
     chapter = _require_chapter(chapter_id, db)
     ref_dir = _chapter_ref_dir(chapter_id)
     _migrate_legacy_ref(_legacy_chapter_ref_image(chapter_id), ref_dir)
-    chapter_refs = _serialize_refs(ref_dir, "chapter", chapter_id)
     cp = _chapter_ref_image_db_path(chapter)
-    if cp:
-        chapter_refs.insert(0, {
-            "filename": Path(chapter.ref_image or cp.name).name,
-            "image_path": chapter.ref_image,
-            "size_kb": round(cp.stat().st_size / 1024),
-        })
+    chapter_refs = _serialize_refs_with_db_ref(ref_dir, "chapter", chapter_id, cp, chapter.ref_image)
     if chapter_refs:
         return {"images": chapter_refs, "source": "chapter", "max": MAX_REF_IMAGES_PER_LEVEL}
     story_dir = _story_ref_dir(chapter.story_id)
     _migrate_legacy_ref(_legacy_story_ref_image(chapter.story_id), story_dir)
-    story_refs = _serialize_refs(story_dir, "story", chapter.story_id)
-    if chapter.story:
-        sp = _story_ref_image_db_path(chapter.story)
-        if sp:
-            story_refs.insert(0, {
-                "filename": Path(chapter.story.ref_image or sp.name).name,
-                "image_path": chapter.story.ref_image,
-                "size_kb": round(sp.stat().st_size / 1024),
-            })
+    sp = _story_ref_image_db_path(chapter.story) if chapter.story else None
+    story_refs = _serialize_refs_with_db_ref(
+        story_dir,
+        "story",
+        chapter.story_id,
+        sp,
+        chapter.story.ref_image if chapter.story else None,
+    )
     if story_refs:
         return {"images": story_refs, "source": "story", "max": MAX_REF_IMAGES_PER_LEVEL}
     return {"images": [], "source": "none", "max": MAX_REF_IMAGES_PER_LEVEL}
@@ -753,13 +764,19 @@ async def list_chapter_ref_images(chapter_id: int, db: Session = Depends(get_db)
 
 @app.post("/api/chapters/{chapter_id}/ref-images")
 async def add_chapter_ref_image(chapter_id: int, request: Request, db: Session = Depends(get_db)):
-    _require_chapter(chapter_id, db)
+    chapter = _require_chapter(chapter_id, db)
     body = await request.json()
     img_bytes = _decode_png_upload(body.get("image", ""))
     ref_dir = _chapter_ref_dir(chapter_id)
     _migrate_legacy_ref(_legacy_chapter_ref_image(chapter_id), ref_dir)
-    _save_uploaded_ref(ref_dir, img_bytes, "chapter ref image")
-    return {"images": _serialize_refs(ref_dir, "chapter", chapter_id), "source": "chapter", "max": MAX_REF_IMAGES_PER_LEVEL}
+    cp = _chapter_ref_image_db_path(chapter)
+    existing_count = len(_list_ref_files(ref_dir)) + (1 if cp else 0)
+    _save_uploaded_ref(ref_dir, img_bytes, "chapter ref image", existing_count=existing_count)
+    return {
+        "images": _serialize_refs_with_db_ref(ref_dir, "chapter", chapter_id, cp, chapter.ref_image),
+        "source": "chapter",
+        "max": MAX_REF_IMAGES_PER_LEVEL,
+    }
 
 
 @app.delete("/api/chapters/{chapter_id}/ref-images/{filename}")
@@ -777,7 +794,11 @@ async def delete_chapter_ref_image(chapter_id: int, filename: str, db: Session =
         return {"images": _serialize_refs(_chapter_ref_dir(chapter_id), "chapter", chapter_id), "source": "chapter", "max": MAX_REF_IMAGES_PER_LEVEL}
     p = _chapter_ref_dir(chapter_id) / filename
     _unlink_file(p, "chapter ref image")
-    return {"images": _serialize_refs(_chapter_ref_dir(chapter_id), "chapter", chapter_id), "source": "chapter", "max": MAX_REF_IMAGES_PER_LEVEL}
+    return {
+        "images": _serialize_refs_with_db_ref(_chapter_ref_dir(chapter_id), "chapter", chapter_id, _chapter_ref_image_db_path(chapter), chapter.ref_image),
+        "source": "chapter",
+        "max": MAX_REF_IMAGES_PER_LEVEL,
+    }
 
 
 # ─── Color Mode ─────────────────────────────────────────────
