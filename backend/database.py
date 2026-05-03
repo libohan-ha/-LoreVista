@@ -4,17 +4,50 @@ import shutil
 from pathlib import Path
 
 from dotenv import load_dotenv
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/manga_novel")
 BASE_DIR = Path(__file__).resolve().parent
+DB_DIR = BASE_DIR / "data"
+DB_DIR.mkdir(exist_ok=True)
+
+# Default to SQLite (zero-config for new users)
+DEFAULT_DB_PATH = DB_DIR / "lorevista.db"
+SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", "").strip()
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
 logger = logging.getLogger("database")
 
-engine = create_engine(DATABASE_URL, echo=False)
+if SQLITE_DB_PATH:
+    db_path = Path(SQLITE_DB_PATH).expanduser()
+    if not db_path.is_absolute():
+        db_path = BASE_DIR / db_path
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    engine_url = f"sqlite:///{db_path}"
+elif DATABASE_URL.startswith("sqlite"):
+    engine_url = DATABASE_URL
+elif DATABASE_URL:
+    logger.warning("Ignoring non-SQLite DATABASE_URL in this SQLite build.")
+    engine_url = f"sqlite:///{DEFAULT_DB_PATH}"
+else:
+    engine_url = f"sqlite:///{DEFAULT_DB_PATH}"
+
+# SQLite needs check_same_thread=False for FastAPI's threaded execution
+engine_kwargs = {"echo": False}
+engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+engine = create_engine(engine_url, **engine_kwargs)
+
+
+@event.listens_for(engine, "connect")
+def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
@@ -46,6 +79,8 @@ def _migrate():
                 conn.execute(text("ALTER TABLE stories ADD COLUMN description TEXT DEFAULT ''"))
             if "cover_image" not in cols:
                 conn.execute(text("ALTER TABLE stories ADD COLUMN cover_image VARCHAR(500)"))
+            if "ref_image" not in cols:
+                conn.execute(text("ALTER TABLE stories ADD COLUMN ref_image VARCHAR(500)"))
             if "character_profiles" not in cols:
                 conn.execute(text("ALTER TABLE stories ADD COLUMN character_profiles TEXT DEFAULT ''"))
     if "chapters" in insp.get_table_names():
@@ -53,11 +88,21 @@ def _migrate():
         with engine.begin() as conn:
             if "content_source" not in cols:
                 conn.execute(text("ALTER TABLE chapters ADD COLUMN content_source VARCHAR(20)"))
+            if "scenes_text" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN scenes_text TEXT"))
+            if "character_profiles" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN character_profiles TEXT"))
+            if "ref_image" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN ref_image VARCHAR(500)"))
+            if "color_mode" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN color_mode VARCHAR(20)"))
+            if "image_count" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN image_count INTEGER"))
         with engine.begin() as conn:
             conn.execute(text("""
                 UPDATE chapters
                 SET content_source = CASE
-                    WHEN novel_content IS NOT NULL AND btrim(novel_content) <> ''
+                    WHEN novel_content IS NOT NULL AND trim(novel_content) <> ''
                          AND (
                             SELECT COUNT(*) FROM chat_messages
                             WHERE chat_messages.chapter_id = chapters.id
@@ -116,7 +161,7 @@ def _cleanup_duplicate_manga_images():
                 SELECT id, image_path, created_at
                 FROM manga_images
                 WHERE chapter_id = :chapter_id AND image_number = :image_number
-                ORDER BY created_at DESC NULLS LAST, id DESC
+                ORDER BY created_at DESC, id DESC
             """), dict(group)).mappings().all()
             for row in rows[1:]:
                 _safe_unlink(BASE_DIR / row["image_path"])
@@ -164,7 +209,7 @@ def _cleanup_duplicate_chapters():
                 LEFT JOIN manga_images mi ON mi.chapter_id = c.id
                 WHERE c.story_id = :story_id AND c.chapter_number = :chapter_number
                 GROUP BY c.id
-                ORDER BY c.created_at DESC NULLS LAST, c.id DESC
+                ORDER BY c.created_at DESC, c.id DESC
             """), dict(group)).mappings().all()
 
             def sort_key(chapter):
@@ -196,34 +241,20 @@ def _cleanup_duplicate_chapters():
 
 
 def _add_unique_constraints():
-    """Apply model unique constraints to existing PostgreSQL tables."""
+    """Apply model unique constraints to existing SQLite databases."""
     from sqlalchemy import inspect, text
-
-    if engine.dialect.name != "postgresql":
-        logger.warning("Skipping unique constraint migration for non-PostgreSQL database: %s", engine.dialect.name)
-        return
 
     insp = inspect(engine)
     table_names = set(insp.get_table_names())
     if not {"chapters", "manga_images"}.issubset(table_names):
         return
 
-    existing = {
-        constraint["name"]
-        for table in ("chapters", "manga_images")
-        for constraint in insp.get_unique_constraints(table)
-    }
-
     with engine.begin() as conn:
-        if "uq_chapters_story_number" not in existing:
-            conn.execute(text("""
-                ALTER TABLE chapters
-                ADD CONSTRAINT uq_chapters_story_number
-                UNIQUE (story_id, chapter_number)
-            """))
-        if "uq_manga_images_chapter_number" not in existing:
-            conn.execute(text("""
-                ALTER TABLE manga_images
-                ADD CONSTRAINT uq_manga_images_chapter_number
-                UNIQUE (chapter_id, image_number)
-            """))
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_chapters_story_number
+            ON chapters (story_id, chapter_number)
+        """))
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_manga_images_chapter_number
+            ON manga_images (chapter_id, image_number)
+        """))

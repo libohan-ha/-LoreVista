@@ -9,10 +9,11 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-*.db
-*.sqlite3
 venv/
 .venv/
+backend/data/
+*.db
+*.sqlite3
 
 # ─── Node ───
 node_modules/
