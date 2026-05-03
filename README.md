@@ -93,6 +93,30 @@ VITE_API_TOKEN=同一个令牌
 └── README.md
 ```
 
+## 🔄 更新到新版本
+
+### 方式一：Git 命令（推荐）
+
+```bash
+cd LoreVista
+git pull origin sqlite
+pip install -r backend/requirements.txt
+cd frontend && npm install
+```
+
+拉取完成后双击 `start.bat` 启动即可。你的数据（数据库、生成的图片、API 密钥）不受影响，数据库会自动升级。
+
+### 方式二：重新下载 ZIP
+
+1. 从 GitHub 下载最新 ZIP 并解压到新文件夹
+2. 把旧文件夹 `backend/` 下的以下 3 样东西复制到新文件夹的 `backend/` 中：
+   - **`lorevista.db`**（或 `data/lorevista.db`）— 数据库文件，包含你的故事、章节、聊天记录
+   - **`manga_outputs/`** 文件夹 — 所有生成的漫画图片
+   - **`.env`** 文件 — 你的 API 密钥配置
+3. 双击 `start.bat` 启动
+
+> ⚠️ 只需复制以上 3 样，其他文件用新版本的即可。启动后数据库结构会自动升级，旧数据不会丢失。
+
 ## 效果
 <img width="1437" height="1325" alt="image" src="https://github.com/user-attachments/assets/292cd965-1bbe-4ac2-be2c-e577d1c1b545" />
 <img width="2477" height="1474" alt="8225c4cd8b1ac53ee97418cc6646db8c" src="https://github.com/user-attachments/assets/2e394e4c-f0c0-4af6-ae8d-63713d111cde" />
