@@ -1,10 +1,52 @@
 const BASE = '';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN as string | undefined;
+export const DEEPSEEK_USAGE_URL = 'https://platform.deepseek.com/usage';
+export const IMAGE2_CONSOLE_URL = 'https://api.duojie.games/console/log';
+
+export interface ApiKeySettings {
+  deepseekApiKey: string;
+  imageApiKey: string;
+}
+
+// Stored in sessionStorage (cleared on browser close) to reduce XSS exposure.
+const SS_DEEPSEEK_API_KEY = 'lorevista.deepseekApiKey';
+const SS_IMAGE_API_KEY = 'lorevista.imageApiKey';
+export const API_KEY_CHANGE_EVENT = 'lorevista:api-key-change';
+
+export function getApiKeySettings(): ApiKeySettings {
+  return {
+    deepseekApiKey: sessionStorage.getItem(SS_DEEPSEEK_API_KEY) || '',
+    imageApiKey: sessionStorage.getItem(SS_IMAGE_API_KEY) || '',
+  };
+}
+
+export function saveApiKeySettings(settings: ApiKeySettings): void {
+  const deepseek = settings.deepseekApiKey.trim();
+  const image = settings.imageApiKey.trim();
+  if (deepseek) sessionStorage.setItem(SS_DEEPSEEK_API_KEY, deepseek);
+  else sessionStorage.removeItem(SS_DEEPSEEK_API_KEY);
+  if (image) sessionStorage.setItem(SS_IMAGE_API_KEY, image);
+  else sessionStorage.removeItem(SS_IMAGE_API_KEY);
+  // Notify same-tab listeners (sessionStorage doesn't fire 'storage' event in the
+  // tab that wrote it; cross-tab is also not relevant for sessionStorage scope).
+  try {
+    window.dispatchEvent(new Event(API_KEY_CHANGE_EVENT));
+  } catch {
+    // SSR / non-browser environment — ignore.
+  }
+}
+
+export function clearApiKeySettings(): void {
+  saveApiKeySettings({ deepseekApiKey: '', imageApiKey: '' });
+}
 
 function apiHeaders(json = false): HeadersInit {
+  const keys = getApiKeySettings();
   return {
     ...(json ? { 'Content-Type': 'application/json' } : {}),
     ...(API_TOKEN ? { 'X-API-Token': API_TOKEN } : {}),
+    ...(keys.deepseekApiKey ? { 'X-DeepSeek-API-Key': keys.deepseekApiKey } : {}),
+    ...(keys.imageApiKey ? { 'X-Image-API-Key': keys.imageApiKey } : {}),
   };
 }
 

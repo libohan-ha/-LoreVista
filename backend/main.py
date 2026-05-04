@@ -27,6 +27,7 @@ from schemas import (
     StoryUpdate,
 )
 from services.deepseek import chat_stream, generate_novel, split_scenes
+from services.errors import MissingApiKeyError
 from services.image2 import generate_manga_image
 
 load_dotenv()
@@ -54,6 +55,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(MissingApiKeyError)
+async def _missing_api_key_handler(request: Request, exc: MissingApiKeyError):
+    return JSONResponse(status_code=400, content={"detail": str(exc), "provider": exc.provider})
+
 # Serve generated manga images as static files
 manga_dir = Path(__file__).resolve().parent / "manga_outputs"
 manga_dir.mkdir(parents=True, exist_ok=True)
@@ -77,6 +83,14 @@ def _require_chapter(chapter_id: int, db: Session) -> Chapter:
     if not chapter:
         raise HTTPException(404, "Chapter not found")
     return chapter
+
+
+def _user_deepseek_api_key(request: Request) -> str | None:
+    return request.headers.get("x-deepseek-api-key") or None
+
+
+def _user_image_api_key(request: Request) -> str | None:
+    return request.headers.get("x-image-api-key") or None
 
 
 def _character_profile_text(body: dict) -> str:
@@ -347,7 +361,7 @@ def delete_chapter(chapter_id: int, db: Session = Depends(get_db)):
 # ─── Chat (SSE streaming) ──────────────────────────────────
 
 @app.post("/api/chapters/{chapter_id}/chat")
-async def chat(chapter_id: int, body: ChatMessageIn, db: Session = Depends(get_db)):
+async def chat(chapter_id: int, body: ChatMessageIn, request: Request, db: Session = Depends(get_db)):
     chapter = db.get(Chapter, chapter_id)
     if not chapter:
         raise HTTPException(404, "Chapter not found")
@@ -388,7 +402,7 @@ async def chat(chapter_id: int, body: ChatMessageIn, db: Session = Depends(get_d
 
     async def event_generator():
         try:
-            async for token in chat_stream(history):
+            async for token in chat_stream(history, api_key=_user_deepseek_api_key(request)):
                 collected.append(token)
                 yield {"event": "token", "data": json.dumps({"content": token}, ensure_ascii=False)}
             # Save assistant message
@@ -415,7 +429,7 @@ async def chat(chapter_id: int, body: ChatMessageIn, db: Session = Depends(get_d
 # ─── Generate Novel ─────────────────────────────────────────
 
 @app.post("/api/chapters/{chapter_id}/generate-novel", response_model=ChapterOut)
-async def generate_novel_endpoint(chapter_id: int, db: Session = Depends(get_db)):
+async def generate_novel_endpoint(chapter_id: int, request: Request, db: Session = Depends(get_db)):
     chapter = db.get(Chapter, chapter_id)
     if not chapter:
         raise HTTPException(404, "Chapter not found")
@@ -426,7 +440,7 @@ async def generate_novel_endpoint(chapter_id: int, db: Session = Depends(get_db)
     if not history:
         raise HTTPException(400, "No chat history to generate novel from")
 
-    novel_content = await generate_novel(history)
+    novel_content = await generate_novel(history, api_key=_user_deepseek_api_key(request))
     chapter.novel_content = novel_content
     chapter.content_source = "chat"
 
@@ -815,7 +829,12 @@ async def generate_scenes_endpoint(chapter_id: int, request: Request, db: Sessio
     image_count = _load_image_count(chapter_id)
     chat_history = [{"role": m.role, "content": m.content} for m in chapter.messages]
     split_task = asyncio.create_task(
-        split_scenes(chat_history, character_profiles=_load_characters(chapter_id, db), page_count=image_count)
+        split_scenes(
+            chat_history,
+            character_profiles=_load_characters(chapter_id, db),
+            page_count=image_count,
+            api_key=_user_deepseek_api_key(request),
+        )
     )
     try:
         while not split_task.done():
@@ -887,7 +906,7 @@ async def update_scenes_endpoint(chapter_id: int, body: dict, db: Session = Depe
 # ─── SSE for manga image generation ─────────────────────
 
 @app.post("/api/chapters/{chapter_id}/generate-manga-stream")
-async def generate_manga_stream(chapter_id: int, db: Session = Depends(get_db)):
+async def generate_manga_stream(chapter_id: int, request: Request, db: Session = Depends(get_db)):
     chapter = db.get(Chapter, chapter_id)
     if not chapter:
         raise HTTPException(404, "Chapter not found")
@@ -936,7 +955,16 @@ async def generate_manga_stream(chapter_id: int, db: Session = Depends(get_db)):
 
                 try:
                     ref_imgs = _effective_ref_image_paths(chapter_id, db)
-                    image_path = await generate_manga_image(scene_prompt, chapter_id, i, all_scenes=scenes, character_profiles=_load_characters(chapter_id, db), ref_image_paths=[str(p) for p in ref_imgs] if ref_imgs else None, color_mode=_load_color_mode(chapter_id))
+                    image_path = await generate_manga_image(
+                        scene_prompt,
+                        chapter_id,
+                        i,
+                        all_scenes=scenes,
+                        character_profiles=_load_characters(chapter_id, db),
+                        ref_image_paths=[str(p) for p in ref_imgs] if ref_imgs else None,
+                        color_mode=_load_color_mode(chapter_id),
+                        api_key=_user_image_api_key(request),
+                    )
                 except Exception as img_err:
                     yield {
                         "event": "error",
@@ -975,7 +1003,7 @@ async def generate_manga_stream(chapter_id: int, db: Session = Depends(get_db)):
 # ─── Regenerate single image ─────────────────────────────
 
 @app.post("/api/chapters/{chapter_id}/regenerate-image/{image_number}")
-async def regenerate_single_image(chapter_id: int, image_number: int, body: dict, db: Session = Depends(get_db)):
+async def regenerate_single_image(chapter_id: int, image_number: int, body: dict, request: Request, db: Session = Depends(get_db)):
     """Regenerate a single panel image with an updated prompt."""
     chapter = db.get(Chapter, chapter_id)
     if not chapter:
@@ -1013,7 +1041,16 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
 
     # Generate new image
     ref_imgs = _effective_ref_image_paths(chapter_id, db)
-    image_path = await generate_manga_image(prompt, chapter_id, image_number, all_scenes=all_scenes, character_profiles=_load_characters(chapter_id, db), ref_image_paths=[str(p) for p in ref_imgs] if ref_imgs else None, color_mode=_load_color_mode(chapter_id))
+    image_path = await generate_manga_image(
+        prompt,
+        chapter_id,
+        image_number,
+        all_scenes=all_scenes,
+        character_profiles=_load_characters(chapter_id, db),
+        ref_image_paths=[str(p) for p in ref_imgs] if ref_imgs else None,
+        color_mode=_load_color_mode(chapter_id),
+        api_key=_user_image_api_key(request),
+    )
 
     if old_img:
         manga = old_img
