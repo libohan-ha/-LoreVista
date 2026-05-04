@@ -27,6 +27,17 @@ MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds
 
 
+def _image_auth_headers(api_key: str | None = None, json_content: bool = False) -> dict[str, str]:
+    key = (api_key or IMAGE_API_KEY or "").strip()
+    if not key:
+        from .errors import MissingApiKeyError
+        raise MissingApiKeyError("Image2")
+    headers = {"Authorization": f"Bearer {key}"}
+    if json_content:
+        headers["Content-Type"] = "application/json"
+    return headers
+
+
 def normalize_image_bytes(image_bytes: bytes) -> bytes:
     """Validate image bytes and return normalized PNG bytes."""
     try:
@@ -48,6 +59,7 @@ async def generate_manga_image(
     character_profiles: str = "",
     ref_image_paths: list[str] | None = None,
     color_mode: str = "bw",
+    api_key: str | None = None,
 ) -> str:
     """Generate a single manga image and save it. Returns the relative file path.
 
@@ -159,7 +171,7 @@ async def generate_manga_image(
                             "prompt": full_prompt,
                             "size": IMAGE_SIZE,
                         },
-                        headers={"Authorization": f"Bearer {IMAGE_API_KEY}"},
+                        headers=_image_auth_headers(api_key),
                     )
                 else:
                     # Normal generation without reference
@@ -170,10 +182,7 @@ async def generate_manga_image(
                             "prompt": full_prompt,
                             "size": IMAGE_SIZE,
                         },
-                        headers={
-                            "Authorization": f"Bearer {IMAGE_API_KEY}",
-                            "Content-Type": "application/json",
-                        },
+                        headers=_image_auth_headers(api_key, json_content=True),
                     )
                 resp.raise_for_status()
                 data = resp.json()

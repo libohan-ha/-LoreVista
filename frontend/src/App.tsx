@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home, MessageSquare, Image, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home, MessageSquare, Image, PanelLeftClose, PanelLeftOpen, KeyRound, ExternalLink, X } from 'lucide-react';
 import ChatPanel from './components/ChatPanel';
 import MangaPanel from './components/MangaPanel';
 import HomePage from './components/HomePage';
@@ -11,6 +11,12 @@ import {
   getChapter,
   type Story,
   type Chapter,
+  getApiKeySettings,
+  saveApiKeySettings,
+  clearApiKeySettings,
+  API_KEY_CHANGE_EVENT,
+  DEEPSEEK_USAGE_URL,
+  IMAGE2_CONSOLE_URL,
 } from './api';
 
 type View = 'home' | 'editor';
@@ -42,6 +48,165 @@ function useIsMobile() {
   return isMobile;
 }
 
+function useApiKeyConfigured() {
+  const read = () => {
+    const s = getApiKeySettings();
+    return { deepseek: !!s.deepseekApiKey, image: !!s.imageApiKey };
+  };
+  const [state, setState] = useState(read);
+  useEffect(() => {
+    const sync = () => setState(read());
+    window.addEventListener(API_KEY_CHANGE_EVENT, sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener(API_KEY_CHANGE_EVENT, sync);
+      window.removeEventListener('storage', sync);
+    };
+  }, []);
+  return state;
+}
+
+function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [deepseekApiKey, setDeepseekApiKey] = useState('');
+  const [imageApiKey, setImageApiKey] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    const settings = getApiKeySettings();
+    setDeepseekApiKey(settings.deepseekApiKey);
+    setImageApiKey(settings.imageApiKey);
+  }, [open]);
+
+  if (!open) return null;
+
+  const handleSave = () => {
+    saveApiKeySettings({ deepseekApiKey, imageApiKey });
+    onClose();
+  };
+
+  const handleClear = () => {
+    if (!window.confirm('确定要清除已保存的两个 API Key 吗？')) return;
+    clearApiKeySettings();
+    setDeepseekApiKey('');
+    setImageApiKey('');
+  };
+
+  const hasAny = !!(deepseekApiKey || imageApiKey);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-lg rounded-xl border border-gray-800 bg-gray-950 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-gray-800 px-5 py-4">
+          <div className="flex items-center gap-2">
+            <KeyRound size={18} className="text-violet-400" />
+            <h2 className="text-sm font-semibold text-gray-100">API Key 设置</h2>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-1.5 text-gray-500 hover:bg-gray-800 hover:text-white">
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="space-y-5 px-5 py-5">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <label className="text-xs font-medium text-gray-300">DeepSeek API Key</label>
+              <a
+                href={DEEPSEEK_USAGE_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-violet-300 hover:text-violet-200"
+              >
+                充值 / 用量
+                <ExternalLink size={12} />
+              </a>
+            </div>
+            <input
+              type="password"
+              value={deepseekApiKey}
+              onChange={(e) => setDeepseekApiKey(e.target.value)}
+              placeholder="sk-..."
+              className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-violet-500"
+            />
+            <p className="text-xs text-gray-500">用于 AI 对话、生成小说正文和生成分镜。</p>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <label className="text-xs font-medium text-gray-300">Image2 API Key</label>
+              <a
+                href={IMAGE2_CONSOLE_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-amber-300 hover:text-amber-200"
+              >
+                充值记录
+                <ExternalLink size={12} />
+              </a>
+            </div>
+            <input
+              type="password"
+              value={imageApiKey}
+              onChange={(e) => setImageApiKey(e.target.value)}
+              placeholder="填入图片生成 API Key"
+              className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-amber-500"
+            />
+            <p className="text-xs text-gray-500">用于生成漫画图片和重新生成单张图片。</p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 border-t border-gray-800 px-5 py-4">
+          <button
+            onClick={handleClear}
+            disabled={!hasAny}
+            className="rounded-lg px-3 py-2 text-xs text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 disabled:cursor-not-allowed disabled:text-gray-600 disabled:hover:bg-transparent"
+          >
+            清除已保存
+          </button>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-gray-400 hover:bg-gray-800 hover:text-white">
+              取消
+            </button>
+            <button onClick={handleSave} className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500">
+              保存
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ApiKeyButton({ onClick, compact = false }: { onClick: () => void; compact?: boolean }) {
+  const { deepseek, image } = useApiKeyConfigured();
+  const status: 'ok' | 'partial' | 'none' =
+    deepseek && image ? 'ok' : deepseek || image ? 'partial' : 'none';
+  const dotColor =
+    status === 'ok' ? 'bg-emerald-400' : status === 'partial' ? 'bg-amber-400' : 'bg-rose-500';
+  const tipText =
+    status === 'ok'
+      ? '已配置 DeepSeek + Image2 API Key'
+      : status === 'partial'
+      ? `仅配置了 ${deepseek ? 'DeepSeek' : 'Image2'} API Key`
+      : '未配置 API Key — 点击设置';
+  return (
+    <button
+      onClick={onClick}
+      className="relative inline-flex items-center gap-1.5 rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-xs font-medium text-gray-300 hover:border-violet-600 hover:text-white"
+      title={tipText}
+    >
+      <KeyRound size={14} />
+      {!compact && 'API Key'}
+      <span
+        className={`absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full ring-2 ring-gray-950 ${dotColor}`}
+        aria-hidden
+      />
+    </button>
+  );
+}
+
 function App() {
   const isMobile = useIsMobile();
   const [view, setView] = useState<View>('home');
@@ -50,6 +215,7 @@ function App() {
   const [currentIdx, _setCurrentIdx] = useState(0);
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat');
   const [chapterNavOpen, setChapterNavOpen] = useState(true);
+  const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
 
   const persistSelectedChapter = (chapter: Chapter | null | undefined) => {
     if (!chapter) return;
@@ -260,7 +426,15 @@ function App() {
 
   // ─── Home page ─────────────────────────────────────────
   if (view === 'home') {
-    return <HomePage onSelectStory={enterStory} />;
+    return (
+      <>
+        <div className="fixed bottom-4 right-4 z-40">
+          <ApiKeyButton onClick={() => setApiKeyModalOpen(true)} />
+        </div>
+        <HomePage onSelectStory={enterStory} />
+        <ApiKeySettingsModal open={apiKeyModalOpen} onClose={() => setApiKeyModalOpen(false)} />
+      </>
+    );
   }
 
   // ─── Editor view ───────────────────────────────────────
@@ -294,11 +468,13 @@ function App() {
           </span>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-500 shrink-0">
+          <ApiKeyButton onClick={() => setApiKeyModalOpen(true)} compact={isMobile} />
           <span>第 {currentChapter?.chapter_number ?? '–'} 话</span>
           {!isMobile && <span>·</span>}
           {!isMobile && <span>共 {chapters.length} 话</span>}
         </div>
       </header>
+      <ApiKeySettingsModal open={apiKeyModalOpen} onClose={() => setApiKeyModalOpen(false)} />
 
       {/* Mobile tab bar */}
       {isMobile && (

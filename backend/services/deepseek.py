@@ -37,6 +37,17 @@ NOVEL_SYSTEM_PROMPT = """你是一位才华横溢、文笔细腻的网络小说�
 请直接输出小说正文，不要加额外说明或字数统计。"""
 
 
+def _deepseek_auth_headers(api_key: str | None = None) -> dict[str, str]:
+    key = (api_key or DEEPSEEK_API_KEY or "").strip()
+    if not key:
+        from .errors import MissingApiKeyError
+        raise MissingApiKeyError("DeepSeek")
+    return {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+
 def _loads_json_lenient(text: str):
     # DeepSeek occasionally returns literal newlines/control chars inside quoted
     # strings. strict=False accepts those without treating the whole response as
@@ -91,7 +102,7 @@ def _scene_split_prompt(page_count: int = 10) -> str:
 ]"""
 
 
-async def chat_stream(messages: list[dict]) -> AsyncGenerator[str, None]:
+async def chat_stream(messages: list[dict], api_key: str | None = None) -> AsyncGenerator[str, None]:
     """Stream chat response from DeepSeek."""
     payload = {
         "model": DEEPSEEK_MODEL,
@@ -105,10 +116,7 @@ async def chat_stream(messages: list[dict]) -> AsyncGenerator[str, None]:
             "POST",
             f"{DEEPSEEK_BASE_URL}/chat/completions",
             json=payload,
-            headers={
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                "Content-Type": "application/json",
-            },
+            headers=_deepseek_auth_headers(api_key),
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
@@ -127,7 +135,7 @@ async def chat_stream(messages: list[dict]) -> AsyncGenerator[str, None]:
                     continue
 
 
-async def generate_novel(messages: list[dict]) -> str:
+async def generate_novel(messages: list[dict], api_key: str | None = None) -> str:
     """Generate a full novel chapter (non-streaming)."""
     full_messages = [{"role": "system", "content": NOVEL_SYSTEM_PROMPT}] + messages
     full_messages.append({
@@ -146,17 +154,14 @@ async def generate_novel(messages: list[dict]) -> str:
         resp = await client.post(
             f"{DEEPSEEK_BASE_URL}/chat/completions",
             json=payload,
-            headers={
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                "Content-Type": "application/json",
-            },
+            headers=_deepseek_auth_headers(api_key),
         )
         resp.raise_for_status()
         data = resp.json()
         return data["choices"][0]["message"]["content"]
 
 
-async def split_scenes(chat_messages: list[dict], character_profiles: str = "", page_count: int = 10) -> list[str]:
+async def split_scenes(chat_messages: list[dict], character_profiles: str = "", page_count: int = 10, api_key: str | None = None) -> list[str]:
     """Use DeepSeek to split chat novel content into manga page descriptions."""
     scene_prompt = _scene_split_prompt(page_count)
     if character_profiles:
@@ -176,10 +181,7 @@ async def split_scenes(chat_messages: list[dict], character_profiles: str = "", 
         resp = await client.post(
             f"{DEEPSEEK_BASE_URL}/chat/completions",
             json=payload,
-            headers={
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                "Content-Type": "application/json",
-            },
+            headers=_deepseek_auth_headers(api_key),
         )
         resp.raise_for_status()
         data = resp.json()
