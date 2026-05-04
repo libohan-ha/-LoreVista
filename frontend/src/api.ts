@@ -8,27 +8,26 @@ export interface ApiKeySettings {
   imageApiKey: string;
 }
 
-// Stored in sessionStorage (cleared on browser close) to reduce XSS exposure.
-const SS_DEEPSEEK_API_KEY = 'lorevista.deepseekApiKey';
-const SS_IMAGE_API_KEY = 'lorevista.imageApiKey';
+// Stored in localStorage so multiple tabs share the same API key settings.
+const LS_DEEPSEEK_API_KEY = 'lorevista.deepseekApiKey';
+const LS_IMAGE_API_KEY = 'lorevista.imageApiKey';
 export const API_KEY_CHANGE_EVENT = 'lorevista:api-key-change';
 
 export function getApiKeySettings(): ApiKeySettings {
   return {
-    deepseekApiKey: sessionStorage.getItem(SS_DEEPSEEK_API_KEY) || '',
-    imageApiKey: sessionStorage.getItem(SS_IMAGE_API_KEY) || '',
+    deepseekApiKey: localStorage.getItem(LS_DEEPSEEK_API_KEY) || '',
+    imageApiKey: localStorage.getItem(LS_IMAGE_API_KEY) || '',
   };
 }
 
 export function saveApiKeySettings(settings: ApiKeySettings): void {
   const deepseek = settings.deepseekApiKey.trim();
   const image = settings.imageApiKey.trim();
-  if (deepseek) sessionStorage.setItem(SS_DEEPSEEK_API_KEY, deepseek);
-  else sessionStorage.removeItem(SS_DEEPSEEK_API_KEY);
-  if (image) sessionStorage.setItem(SS_IMAGE_API_KEY, image);
-  else sessionStorage.removeItem(SS_IMAGE_API_KEY);
-  // Notify same-tab listeners (sessionStorage doesn't fire 'storage' event in the
-  // tab that wrote it; cross-tab is also not relevant for sessionStorage scope).
+  if (deepseek) localStorage.setItem(LS_DEEPSEEK_API_KEY, deepseek);
+  else localStorage.removeItem(LS_DEEPSEEK_API_KEY);
+  if (image) localStorage.setItem(LS_IMAGE_API_KEY, image);
+  else localStorage.removeItem(LS_IMAGE_API_KEY);
+  // Notify same-tab listeners. Other tabs receive the browser 'storage' event.
   try {
     window.dispatchEvent(new Event(API_KEY_CHANGE_EVENT));
   } catch {
