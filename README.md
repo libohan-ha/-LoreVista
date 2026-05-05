@@ -28,37 +28,43 @@ git clone -b sqlite https://github.com/libohan-ha/-LoreVista.git
 cd -LoreVista
 ```
 
-### 2. 安装后端依赖
+### 2. 安装依赖
 
-进入后端目录：
+你可以选择下面任意一种方式安装前后端依赖。
+
+#### 方式一（推荐，小白友好）：双击 `install.bat`
+
+进入项目根目录，双击：
+
+```text
+install.bat
+```
+
+脚本会自动检查 Python / Node.js，并依次安装后端 (`pip install`) 和前端 (`npm install`) 依赖。看到 `Install completed successfully!` 即成功。
+
+> 前置条件：已安装 Python 3.10+ 和 Node.js 18+。如果脚本提示找不到 Python 或 Node，请先去官网安装：  
+> Python: https://www.python.org/downloads/（安装时勾选 *Add Python to PATH*）  
+> Node.js: https://nodejs.org/
+
+#### 方式二：手动安装
+
+先安装后端依赖：
 
 ```bash
 cd backend
 pip install -r requirements.txt
-```
-
-安装完成后，回到项目根目录：
-
-```bash
 cd ..
 ```
 
-### 3. 安装前端依赖
-
-进入前端目录：
+再安装前端依赖：
 
 ```bash
 cd frontend
 npm install
-```
-
-安装完成后，回到项目根目录：
-
-```bash
 cd ..
 ```
 
-### 4. 启动项目
+### 3. 启动项目
 
 你可以选择下面任意一种启动方式。
 
@@ -100,7 +106,7 @@ start.bat
 http://localhost:5173
 ```
 
-### 5. 配置 API Key
+### 4. 配置 API Key
 
 打开网页后，点击页面上的 **API Key** 按钮。
 
@@ -123,12 +129,12 @@ https://platform.deepseek.com/usage
 充值入口：
 
 ```text
-https://api.duojie.games/console/log
+https://api.duojie.games/console/token
 ```
 
 购买后，把两个 API Key 分别填入网页里的 API Key 设置窗口，然后点击保存。
 
-### 6. 开始测试
+### 5. 开始测试
 
 配置完成后，就可以开始测试：
 
