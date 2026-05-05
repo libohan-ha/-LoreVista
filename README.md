@@ -1,133 +1,125 @@
 # LoreVista
 
-AI 驱动的小说创作 + 漫画插画生成工具。通过对话引导 AI 创作奇幻小说，自动拆分分镜脚本，生成精美日式轻小说风格彩色插画。
+AI 小说创作 + 漫画插画生成工具。通过对话引导 AI 创作小说，自动拆分分镜脚本，并生成漫画图片。
 
-## ✨ 功能
+## 功能
 
-- **AI 小说创作** — 基于 DeepSeek API，通过对话交互引导创作，单话 4000-6000 字
-- **自动分镜** — AI 将小说内容拆分为 10 格漫画分镜脚本，支持手动编辑
-- **插画生成** — 基于 GPT-Image-2 API 生成精美彩色插画，支持逐张重新生成
-- **角色卡系统** — 固定角色外貌描述嵌入每张图片 prompt，保证人物形象一致性
-- **实时流式输出** — 小说创作和图片生成均支持 SSE 流式进度展示
+- **AI 小说创作**：基于 DeepSeek API，通过对话交互引导创作。
+- **自动分镜**：AI 将小说内容拆分为漫画分镜脚本，支持手动编辑。
+- **漫画生成**：基于 Image2 API 生成漫画图片，支持逐张重新生成。
+- **角色卡系统**：固定角色外貌描述，帮助保持人物形象一致。
+- **多张垫图**：支持上传多张参考图，让生成结果更稳定。
+- **实时进度**：对话、分镜、漫画生成都有进度反馈。
 
-## 🛠️ 技术栈
+## 技术栈
 
-- **后端**: Python / FastAPI / SQLAlchemy / SQLite (零配置)
-- **前端**: React / TypeScript / Vite / TailwindCSS
-- **AI**: DeepSeek API (小说 & 分镜) + GPT-Image-2 API (插画生成)
+- **后端**：Python / FastAPI / SQLAlchemy / SQLite
+- **前端**：React / TypeScript / Vite / TailwindCSS
+- **AI**：DeepSeek API + Image2 API
 
-## 🚀 快速开始
+## 使用教程（SQLite 版）
 
-### 下载 SQLite 版
+### 1. 拉取项目代码
+
+先打开终端，执行：
 
 ```bash
 git clone -b sqlite https://github.com/libohan-ha/-LoreVista.git
 cd -LoreVista
 ```
 
-### 一键启动 (Windows)
+### 2. 安装后端依赖
 
-双击项目根目录的 **`start.bat`**，自动启动后端 + 前端 + 打开浏览器。
-
-### 手动启动
-
-1. 编辑 `backend/.env.example` 填入你的 API Key，然后重命名为 `.env`
-2. 启动后端：
+进入后端目录：
 
 ```bash
 cd backend
 pip install -r requirements.txt
-python main.py
 ```
 
-3. 启动前端：
+安装完成后，回到项目根目录：
+
+```bash
+cd ..
+```
+
+### 3. 安装前端依赖
+
+进入前端目录：
 
 ```bash
 cd frontend
 npm install
-npm run dev
 ```
 
-访问 `http://localhost:5173` 即可使用。
-
-## ⚙️ 环境变量
-
-在 `backend/.env` 中配置：
-
-```
-DEEPSEEK_API_KEY=你的DeepSeek密钥
-IMAGE_API_KEY=你的图片生成API密钥
-
-# 数据库默认使用 SQLite：backend/data/lorevista.db
-# 可选：自定义 SQLite 文件位置
-# SQLITE_DB_PATH=data/lorevista.db
-
-HOST=127.0.0.1
-PORT=8000
-CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
-MAX_UPLOAD_BYTES=10485760
-# 可选：设置后前端也要配置相同的 VITE_API_TOKEN
-API_TOKEN=
-```
-
-**密钥获取指南：**
-
-- **DeepSeek API Key**: [https://platform.deepseek.com](https://platform.deepseek.com) 注册并充值，在 API Keys 页面创建并填入
-- **Image2 API Key**: [https://api.duojie.games/console](https://api.duojie.games/console) 注册后充值额度，在「令牌管理」中创建 API Key 填入
-
-如果后端设置了 `API_TOKEN`，前端需要在 `frontend/.env` 中设置相同令牌：
-
-```
-VITE_API_TOKEN=同一个令牌
-```
-
-## 📁 项目结构
-
-```
-├── backend/
-│   ├── main.py              # FastAPI 主应用
-│   ├── database.py          # SQLite 数据库连接与迁移
-│   ├── data/                # 本地 SQLite 数据库（不会提交到 Git）
-│   ├── services/
-│   │   ├── deepseek.py      # DeepSeek 小说/分镜服务
-│   │   └── image2.py        # 图片生成服务
-│   └── manga_outputs/       # 生成的图片输出目录
-├── frontend/
-│   ├── src/
-│   │   ├── components/      # React 组件
-│   │   └── api.ts           # API 调用封装
-│   └── ...
-└── README.md
-```
-
-## 🔄 更新到新版本
-
-### 方式一：Git 命令（推荐）
+安装完成后，回到项目根目录：
 
 ```bash
-cd LoreVista
-git pull origin sqlite
-pip install -r backend/requirements.txt
-cd frontend && npm install
+cd ..
 ```
 
-拉取完成后双击 `start.bat` 启动即可。你的数据（数据库、生成的图片、API 密钥）不受影响，数据库会自动升级。
+### 4. 启动项目
 
-### 方式二：重新下载 ZIP
+以后启动项目，只需要双击项目根目录里的：
 
-1. 从 GitHub 下载最新 ZIP 并解压到新文件夹
-2. 把旧文件夹 `backend/` 下的以下 3 样东西复制到新文件夹的 `backend/` 中：
-   - **`lorevista.db`**（或 `data/lorevista.db`）— 数据库文件，包含你的故事、章节、聊天记录
-   - **`manga_outputs/`** 文件夹 — 所有生成的漫画图片
-   - **`.env`** 文件 — 你的 API 密钥配置
-3. 双击 `start.bat` 启动
+```text
+start.bat
+```
 
-> ⚠️ 只需复制以上 3 样，其他文件用新版本的即可。启动后数据库结构会自动升级，旧数据不会丢失。
+它会自动启动后端、前端，并打开浏览器页面。
+
+如果浏览器没有自动打开，可以手动访问：
+
+```text
+http://localhost:5173
+```
+
+### 5. 配置 API Key
+
+打开网页后，点击页面上的 **API Key** 按钮。
+
+你需要配置两个 Key：
+
+#### DeepSeek API Key
+
+用于 AI 对话、生成小说、生成分镜。
+
+购买 / 查看用量：
+
+```text
+https://platform.deepseek.com/usage
+```
+
+#### Image2 API Key
+
+用于生成漫画图片。
+
+充值入口：
+
+```text
+https://api.duojie.games/console/log
+```
+
+购买后，把两个 API Key 分别填入网页里的 API Key 设置窗口，然后点击保存。
+
+### 6. 开始测试
+
+配置完成后，就可以开始测试：
+
+1. 点击“新建小说”
+2. 进入小说
+3. 和 AI 对话，生成小说内容
+4. 生成分镜
+5. 生成漫画图片
+
+SQLite 版默认会把数据保存在本地，不需要安装 PostgreSQL。
 
 ## 效果
+
 <img width="1437" height="1325" alt="image" src="https://github.com/user-attachments/assets/292cd965-1bbe-4ac2-be2c-e577d1c1b545" />
 <img width="2477" height="1474" alt="8225c4cd8b1ac53ee97418cc6646db8c" src="https://github.com/user-attachments/assets/2e394e4c-f0c0-4af6-ae8d-63713d111cde" />
 <img width="2478" height="1479" alt="image" src="https://github.com/user-attachments/assets/5e4a6aa5-9f7f-49a2-8e47-65a5c2ad9dec" />
 
+## License
 
 MIT
