@@ -1,7 +1,7 @@
 const BASE = '';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN as string | undefined;
 export const DEEPSEEK_USAGE_URL = 'https://platform.deepseek.com/usage';
-export const IMAGE2_CONSOLE_URL = 'https://api.duojie.games/console/log';
+export const IMAGE2_CONSOLE_URL = 'https://api.duojie.games/console/token';
 
 export interface ApiKeySettings {
   deepseekApiKey: string;

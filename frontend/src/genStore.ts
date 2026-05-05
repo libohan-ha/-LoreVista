@@ -14,6 +14,7 @@ export interface GenState {
   statusMsg: string;
   images: GenImage[];
   errorMsg: string;
+  lastEventAt: number;    // epoch ms of most recent SSE event for stall detection
 }
 
 const states = new Map<number, GenState>();
@@ -35,19 +36,20 @@ export const genStore = {
       statusMsg: '正在生成漫画…',
       images: [],
       errorMsg: '',
+      lastEventAt: Date.now(),
     });
     emit();
   },
   patch(chapterId: number, p: Partial<GenState>) {
     const cur = states.get(chapterId);
     if (!cur) return;
-    states.set(chapterId, { ...cur, ...p });
+    states.set(chapterId, { ...cur, ...p, lastEventAt: Date.now() });
     emit();
   },
   pushImage(chapterId: number, img: GenImage) {
     const cur = states.get(chapterId);
     if (!cur) return;
-    states.set(chapterId, { ...cur, images: [...cur.images, img] });
+    states.set(chapterId, { ...cur, images: [...cur.images, img], lastEventAt: Date.now() });
     emit();
   },
   finish(chapterId: number, errorMsg?: string) {
