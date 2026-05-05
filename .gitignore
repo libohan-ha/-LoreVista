@@ -35,6 +35,8 @@ Thumbs.db
 .spec-workflow/
 
 # ─── Misc test files ───
+test/
+releases/
 test_*.py
 test_*.png
 test_*.txt
