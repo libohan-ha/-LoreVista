@@ -384,6 +384,20 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   }, [lightboxIdx, handleLightboxNav]);
 
   const generating = isLiveGenerating || phase === 'generating-images';
+
+  // Tick every 1s while generating so the stall indicator re-renders.
+  const [, setNowTick] = useState(0);
+  useEffect(() => {
+    if (!generating) return;
+    const id = window.setInterval(() => setNowTick((n) => n + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [generating]);
+
+  const stallSeconds = isLiveGenerating && liveGen
+    ? Math.max(0, Math.floor((Date.now() - liveGen.lastEventAt) / 1000))
+    : 0;
+  const isStalled = isLiveGenerating && stallSeconds >= 30;
+
   const liveProgress = isLiveGenerating
     ? { current: liveGen!.current, total: liveGen!.total }
     : progress;
@@ -585,9 +599,20 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
       {/* Progress bar */}
       {generating && (
         <div className="px-5 py-4 border-b border-gray-800 bg-gray-900/50">
-          <div className="flex items-center justify-between text-xs mb-3">
-            <span className="text-gray-300 font-medium">{liveStatusMsg}</span>
-            <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between text-xs mb-3 gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-gray-300 font-medium truncate">{liveStatusMsg}</span>
+              {isStalled && (
+                <span
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/40 text-amber-300 text-[10px] font-medium whitespace-nowrap animate-pulse"
+                  title="图片服务响应较慢，正在继续等待（上游可能在排队）"
+                >
+                  <Loader2 size={10} className="animate-spin" />
+                  等待中 {stallSeconds}s
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 onClick={handleAbortManga}
                 className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md

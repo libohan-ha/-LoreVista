@@ -142,7 +142,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
                 rel="noreferrer"
                 className="inline-flex items-center gap-1 text-xs text-amber-300 hover:text-amber-200"
               >
-                充值记录
+                充值链接
                 <ExternalLink size={12} />
               </a>
             </div>

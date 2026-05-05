@@ -148,6 +148,18 @@ async def generate_manga_image(
             mode = f"edits({len(ref_blobs)}图垫图)" if ref_blobs else "generations"
             logger.info(f"[{progress_label}] 开始调用 Image2 API [{mode}]（尝试 {attempt}/{MAX_RETRIES}）")
             t0 = time.time()
+
+            async def _heartbeat(label: str, start_ts: float) -> None:
+                """Log every 30s while the API call is in flight."""
+                try:
+                    while True:
+                        await asyncio.sleep(30)
+                        waited = int(time.time() - start_ts)
+                        logger.info(f"[{label}] 等待中... 已等待 {waited}s（上游可能排队，继续等）")
+                except asyncio.CancelledError:
+                    return
+
+            heartbeat_task = asyncio.create_task(_heartbeat(progress_label, t0))
             timeout = httpx.Timeout(connect=30, read=600, write=120, pool=30)
             # NOTE: Avoid custom socket_options — they use Linux TCP constants which
             # silently break on Windows and cause the 2nd multipart request to hang.
@@ -186,6 +198,7 @@ async def generate_manga_image(
                     )
                 resp.raise_for_status()
                 data = resp.json()
+            heartbeat_task.cancel()
             elapsed = time.time() - t0
             logger.info(f"[{progress_label}] API 返回成功，耗时 {elapsed:.1f}s")
 
@@ -219,6 +232,10 @@ async def generate_manga_image(
 
         except Exception as e:
             last_err = e
+            try:
+                heartbeat_task.cancel()
+            except Exception:
+                pass
             logger.error(f"[{progress_label}] 尝试 {attempt} 失败: {e}")
             if attempt < MAX_RETRIES:
                 logger.info(f"[{progress_label}] {RETRY_DELAY}秒后重试...")
