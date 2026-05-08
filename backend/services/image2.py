@@ -3,6 +3,7 @@ import base64
 import io
 import logging
 import os
+import re
 import time
 import uuid
 from pathlib import Path
@@ -16,7 +17,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message
 
 load_dotenv()
 
-IMAGE_API_BASE_URL = os.getenv("IMAGE_API_BASE_URL", "https://api.duojie.games/v1").rstrip("/")
+DEFAULT_IMAGE_API_BASE_URL = "https://api.duojie.games/v1"
+
+
+def normalize_image_api_base_url(base_url: str | None) -> str:
+    base = (base_url or DEFAULT_IMAGE_API_BASE_URL).strip().rstrip("/")
+    return re.sub(r"(?i)(/v1)+$", "/v1", base)
+
+
+IMAGE_API_BASE_URL = normalize_image_api_base_url(os.getenv("IMAGE_API_BASE_URL"))
 IMAGE_API_KEY = os.getenv("IMAGE_API_KEY", "")
 IMAGE_MODEL = "gpt-image-2"
 IMAGE_SIZE = "1024x1536"
