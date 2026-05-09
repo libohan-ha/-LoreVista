@@ -9,6 +9,7 @@ import shutil
 import uuid
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -901,7 +902,7 @@ def export_story(story_id: int, db: Session = Depends(get_db)):
         },
     }
 
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
         added: set[str] = set()
         cover_zip = _zip_add_path(
             zf,
@@ -959,7 +960,13 @@ def export_story(story_id: int, db: Session = Depends(get_db)):
 
     buf.seek(0)
     safe_title = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in story.title).strip("_") or f"story_{story.id}"
-    headers = {"Content-Disposition": f'attachment; filename="{safe_title}_lorevista.zip"'}
+    download_name = f"{safe_title}_lorevista.zip"
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="story_{story.id}_lorevista.zip"; '
+            f"filename*=UTF-8''{quote(download_name)}"
+        )
+    }
     return StreamingResponse(buf, media_type="application/zip", headers=headers)
 
 
