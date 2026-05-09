@@ -55,6 +55,7 @@ export default function HomePage({ onSelectStory }: Props) {
   const importFileRef = useRef<HTMLInputElement>(null);
   const [uploadingCover, setUploadingCover] = useState<number | null>(null);
   const [importingStory, setImportingStory] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ message: string; percent?: number } | null>(null);
   const [exportingStoryId, setExportingStoryId] = useState<number | null>(null);
 
   // Character card modal
@@ -213,14 +214,18 @@ export default function HomePage({ onSelectStory }: Props) {
     e.target.value = '';
     if (!file) return;
     setImportingStory(true);
+    setImportProgress({ message: '准备上传作品包...', percent: 0 });
     try {
-      const imported = await importStoryPackage(file);
+      const imported = await importStoryPackage(file, (progress) => {
+        setImportProgress({ message: progress.message, percent: progress.percent });
+      });
       await loadStories();
       onSelectStory(imported);
     } catch (err: any) {
       alert(`导入失败: ${err.message}`);
     } finally {
       setImportingStory(false);
+      setImportProgress(null);
     }
   };
 
@@ -298,6 +303,23 @@ export default function HomePage({ onSelectStory }: Props) {
         className="hidden"
         onChange={handleImportFile}
       />
+      {importProgress && (
+        <div className="fixed inset-x-0 top-4 z-[70] mx-auto w-[calc(100%-32px)] max-w-md rounded-xl border border-gray-700 bg-gray-950/95 p-4 shadow-2xl backdrop-blur">
+          <div className="mb-2 flex items-center gap-2 text-sm font-medium text-gray-100">
+            <Loader2 size={16} className="animate-spin text-violet-400" />
+            <span>{importProgress.message}</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-gray-800">
+            <div
+              className="h-full rounded-full bg-violet-500 transition-all duration-200"
+              style={{ width: `${importProgress.percent ?? 100}%` }}
+            />
+          </div>
+          <p className="mt-2 text-xs text-gray-500">
+            上传完成后服务器还需要解压图片并写入数据库，大作品会多等一会儿。
+          </p>
+        </div>
+      )}
 
       {/* Header */}
       <header className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-10">
