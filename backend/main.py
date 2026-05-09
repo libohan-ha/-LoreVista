@@ -1018,6 +1018,7 @@ async def import_story(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(400, "Import package is empty")
     if len(body) > MAX_IMPORT_ZIP_BYTES:
         raise HTTPException(413, f"Import package is too large. Max size is {MAX_IMPORT_ZIP_BYTES // (1024 * 1024)}MB")
+    logger.info("Import story package received: %.1f MB", len(body) / (1024 * 1024))
 
     written: list[Path] = []
     try:
@@ -1027,6 +1028,7 @@ async def import_story(request: Request, db: Session = Depends(get_db)):
             total_uncompressed = sum(info.file_size for info in zf.infolist())
             if total_uncompressed > MAX_IMPORT_ZIP_BYTES:
                 raise HTTPException(413, f"Import package expands beyond {MAX_IMPORT_ZIP_BYTES // (1024 * 1024)}MB")
+            logger.info("Import story package expanded size: %.1f MB", total_uncompressed / (1024 * 1024))
 
             try:
                 manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
@@ -1055,6 +1057,7 @@ async def import_story(request: Request, db: Session = Depends(get_db)):
             )
             db.add(story)
             db.flush()
+            logger.info("Importing story id=%s title=%r with %s chapters", story.id, story.title, len(chapters_data))
 
             cover_member = _require_zip_member(zf, story_data.get("cover_image"))
             if cover_member:
@@ -1078,6 +1081,12 @@ async def import_story(request: Request, db: Session = Depends(get_db)):
                 chapter_number = int(chapter_data.get("chapter_number") or 0)
                 if chapter_number <= 0:
                     raise HTTPException(400, "Chapter numbers must be positive")
+                logger.info(
+                    "Importing story id=%s chapter=%s images=%s",
+                    story.id,
+                    chapter_number,
+                    len(chapter_data.get("images", []) or []),
+                )
 
                 chapter = Chapter(
                     story_id=story.id,
@@ -1130,18 +1139,29 @@ async def import_story(request: Request, db: Session = Depends(get_db)):
             if not chapters_data:
                 db.add(Chapter(story_id=story.id, chapter_number=1))
 
+            logger.info("Committing imported story id=%s", story.id)
             db.commit()
             db.refresh(story)
+            logger.info("Imported story id=%s title=%r", story.id, story.title)
             return story
     except zipfile.BadZipFile:
         db.rollback()
+        logger.warning("Import story package rejected: invalid zip")
         raise HTTPException(400, "Import package is not a valid zip file")
+    except HTTPException:
+        db.rollback()
+        for path in written:
+            with contextlib.suppress(OSError):
+                if path.exists():
+                    path.unlink()
+        raise
     except Exception:
         db.rollback()
         for path in written:
             with contextlib.suppress(OSError):
                 if path.exists():
                     path.unlink()
+        logger.exception("Failed to import story package")
         raise
 
 

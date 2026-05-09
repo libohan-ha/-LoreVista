@@ -135,17 +135,70 @@ export async function exportStory(story: Story): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-export async function importStoryPackage(file: File): Promise<Story> {
-  const res = await fetch(`${BASE}/api/stories/import`, {
-    method: 'POST',
-    headers: {
-      ...apiHeaders(),
-      'Content-Type': 'application/zip',
-    },
-    body: file,
+export interface ImportStoryProgress {
+  phase: 'uploading' | 'processing';
+  percent?: number;
+  message: string;
+}
+
+function parseApiError(text: string): string {
+  try {
+    const data = JSON.parse(text);
+    if (typeof data?.detail === 'string') return data.detail;
+    if (Array.isArray(data?.detail)) return data.detail.map((item: any) => item?.msg || JSON.stringify(item)).join('; ');
+    if (typeof data?.error === 'string') return data.error;
+  } catch {
+    // Plain text response.
+  }
+  return text || 'Request failed';
+}
+
+export function importStoryPackage(
+  file: File,
+  onProgress?: (progress: ImportStoryProgress) => void,
+): Promise<Story> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BASE}/api/stories/import`);
+    const headers = apiHeaders();
+    Object.entries(headers).forEach(([key, value]) => {
+      if (typeof value === 'string') xhr.setRequestHeader(key, value);
+    });
+    xhr.setRequestHeader('Content-Type', 'application/zip');
+    xhr.responseType = 'text';
+
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) {
+        onProgress?.({ phase: 'uploading', message: '正在上传作品包...' });
+        return;
+      }
+      const percent = Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100)));
+      onProgress?.({ phase: 'uploading', percent, message: `正在上传作品包 ${percent}%` });
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.({ phase: 'processing', percent: 100, message: '导入完成，正在刷新作品列表...' });
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch {
+          reject(new Error('导入完成但响应格式无效'));
+        }
+        return;
+      }
+      reject(new Error(parseApiError(xhr.responseText)));
+    };
+
+    xhr.onerror = () => reject(new Error('网络连接中断。请检查服务器端口、防火墙或上传包大小限制。'));
+    xhr.onabort = () => reject(new Error('导入已取消'));
+    xhr.ontimeout = () => reject(new Error('导入超时。作品包较大时请稍后重试。'));
+
+    onProgress?.({ phase: 'uploading', percent: 0, message: '准备上传作品包...' });
+    xhr.send(file);
+    xhr.upload.onload = () => {
+      onProgress?.({ phase: 'processing', percent: 100, message: '上传完成，服务器正在解压并写入作品...' });
+    };
   });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
 }
 
 export async function uploadStoryCover(storyId: number, base64: string): Promise<string> {
