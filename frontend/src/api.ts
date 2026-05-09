@@ -201,16 +201,6 @@ export function importStoryPackage(
   });
 }
 
-export async function importStoryPackageFromServerPath(path: string): Promise<Story> {
-  const res = await fetch(`${BASE}/api/stories/import-from-path`, {
-    method: 'POST',
-    headers: apiHeaders(true),
-    body: JSON.stringify({ path }),
-  });
-  if (!res.ok) throw new Error(parseApiError(await res.text()));
-  return res.json();
-}
-
 export async function uploadStoryCover(storyId: number, base64: string): Promise<string> {
   const res = await fetch(`${BASE}/api/stories/${storyId}/upload-cover`, {
     method: 'POST',
