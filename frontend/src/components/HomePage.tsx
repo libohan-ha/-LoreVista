@@ -11,12 +11,16 @@ import {
   Sparkles,
   Users,
   Loader2,
+  Download,
+  Upload,
 } from 'lucide-react';
 import {
   listStories,
   createStory,
   updateStory,
   deleteStory,
+  exportStory,
+  importStoryPackage,
   uploadStoryCover,
   coverImageUrl,
   getStoryCharacters,
@@ -48,7 +52,10 @@ export default function HomePage({ onSelectStory }: Props) {
   const [editDesc, setEditDesc] = useState('');
 
   const fileRef = useRef<HTMLInputElement>(null);
+  const importFileRef = useRef<HTMLInputElement>(null);
   const [uploadingCover, setUploadingCover] = useState<number | null>(null);
+  const [importingStory, setImportingStory] = useState(false);
+  const [exportingStoryId, setExportingStoryId] = useState<number | null>(null);
 
   // Character card modal
   const [charModalStoryId, setCharModalStoryId] = useState<number | null>(null);
@@ -190,6 +197,33 @@ export default function HomePage({ onSelectStory }: Props) {
     setStories((prev) => prev.filter((s) => s.id !== id));
   };
 
+  const handleExport = async (s: Story) => {
+    setExportingStoryId(s.id);
+    try {
+      await exportStory(s);
+    } catch (err: any) {
+      alert(`导出失败: ${err.message}`);
+    } finally {
+      setExportingStoryId(null);
+    }
+  };
+
+  const handleImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setImportingStory(true);
+    try {
+      const imported = await importStoryPackage(file);
+      await loadStories();
+      onSelectStory(imported);
+    } catch (err: any) {
+      alert(`导入失败: ${err.message}`);
+    } finally {
+      setImportingStory(false);
+    }
+  };
+
   const startEdit = (s: Story) => {
     setEditingId(s.id);
     setEditTitle(s.title);
@@ -257,6 +291,13 @@ export default function HomePage({ onSelectStory }: Props) {
         className="hidden"
         onChange={handleCoverFile}
       />
+      <input
+        ref={importFileRef}
+        type="file"
+        accept=".zip,application/zip"
+        className="hidden"
+        onChange={handleImportFile}
+      />
 
       {/* Header */}
       <header className="border-b border-gray-800 bg-gray-950/80 backdrop-blur-sm sticky top-0 z-10">
@@ -270,6 +311,16 @@ export default function HomePage({ onSelectStory }: Props) {
               <p className="text-xs text-gray-500">AI 小说 · 漫画工坊</p>
             </div>
           </div>
+          <button
+            onClick={() => importFileRef.current?.click()}
+            disabled={importingStory}
+            className="ml-auto mr-2 flex items-center gap-2 px-4 py-2.5 bg-gray-800 hover:bg-gray-700
+                       text-gray-200 text-sm font-medium rounded-lg transition-colors disabled:opacity-40"
+            title="导入整本作品"
+          >
+            {importingStory ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+            导入
+          </button>
           <button
             onClick={() => setShowNew(true)}
             className="flex items-center gap-2 px-4 py-2.5 bg-violet-600 hover:bg-violet-500
@@ -446,6 +497,17 @@ export default function HomePage({ onSelectStory }: Props) {
                             title={storyRefFlags[s.id] ? '默认垫图（已设定）' : '设置默认垫图'}
                           >
                             <ImagePlus size={13} />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleExport(s);
+                            }}
+                            disabled={exportingStoryId === s.id}
+                            className="p-1.5 text-gray-600 hover:text-sky-300 transition-colors rounded disabled:opacity-40"
+                            title="导出整本作品"
+                          >
+                            {exportingStoryId === s.id ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
                           </button>
                           <button
                             onClick={(e) => {

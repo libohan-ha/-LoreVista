@@ -46,6 +46,8 @@ def _migrate():
                 conn.execute(text("ALTER TABLE stories ADD COLUMN description TEXT DEFAULT ''"))
             if "cover_image" not in cols:
                 conn.execute(text("ALTER TABLE stories ADD COLUMN cover_image VARCHAR(500)"))
+            if "ref_image" not in cols:
+                conn.execute(text("ALTER TABLE stories ADD COLUMN ref_image VARCHAR(500)"))
             if "character_profiles" not in cols:
                 conn.execute(text("ALTER TABLE stories ADD COLUMN character_profiles TEXT DEFAULT ''"))
     if "chapters" in insp.get_table_names():
@@ -53,6 +55,16 @@ def _migrate():
         with engine.begin() as conn:
             if "content_source" not in cols:
                 conn.execute(text("ALTER TABLE chapters ADD COLUMN content_source VARCHAR(20)"))
+            if "scenes_text" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN scenes_text TEXT"))
+            if "character_profiles" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN character_profiles TEXT"))
+            if "ref_image" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN ref_image VARCHAR(500)"))
+            if "color_mode" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN color_mode VARCHAR(20)"))
+            if "image_count" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN image_count INTEGER"))
         with engine.begin() as conn:
             conn.execute(text("""
                 UPDATE chapters
