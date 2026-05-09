@@ -13,7 +13,6 @@ import {
   Loader2,
   Download,
   Upload,
-  Server,
 } from 'lucide-react';
 import {
   listStories,
@@ -22,7 +21,6 @@ import {
   deleteStory,
   exportStory,
   importStoryPackage,
-  importStoryPackageFromServerPath,
   uploadStoryCover,
   coverImageUrl,
   getStoryCharacters,
@@ -231,23 +229,6 @@ export default function HomePage({ onSelectStory }: Props) {
     }
   };
 
-  const handleImportServerPath = async () => {
-    const serverPath = window.prompt('输入服务器上的 ZIP 路径，或 imports 目录里的文件名', 'story.zip')?.trim();
-    if (!serverPath) return;
-    setImportingStory(true);
-    setImportProgress({ message: '服务器正在读取并导入作品包...', percent: 100 });
-    try {
-      const imported = await importStoryPackageFromServerPath(serverPath);
-      await loadStories();
-      onSelectStory(imported);
-    } catch (err: any) {
-      alert(`服务器导入失败: ${err.message}`);
-    } finally {
-      setImportingStory(false);
-      setImportProgress(null);
-    }
-  };
-
   const startEdit = (s: Story) => {
     setEditingId(s.id);
     setEditTitle(s.title);
@@ -361,16 +342,6 @@ export default function HomePage({ onSelectStory }: Props) {
           >
             {importingStory ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
             导入
-          </button>
-          <button
-            onClick={handleImportServerPath}
-            disabled={importingStory}
-            className="mr-2 flex items-center gap-2 px-4 py-2.5 bg-gray-800 hover:bg-gray-700
-                       text-gray-200 text-sm font-medium rounded-lg transition-colors disabled:opacity-40"
-            title="从服务器路径导入作品包"
-          >
-            <Server size={16} />
-            服务器导入
           </button>
           <button
             onClick={() => setShowNew(true)}

@@ -70,8 +70,6 @@ async def _missing_api_key_handler(request: Request, exc: MissingApiKeyError):
 manga_dir = Path(__file__).resolve().parent / "manga_outputs"
 manga_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/static/manga", StaticFiles(directory=str(manga_dir)), name="manga")
-IMPORT_DIR = Path(os.getenv("LOREVISTA_IMPORT_DIR", str(Path(__file__).resolve().parent.parent / "imports"))).resolve()
-IMPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @app.middleware("http")
@@ -1000,34 +998,6 @@ def _copy_zip_asset(zf: zipfile.ZipFile, member: str | None, target: Path, label
     return True
 
 
-class _ImportBodyRequest:
-    def __init__(self, body: bytes):
-        self._body = body
-
-    async def body(self) -> bytes:
-        return self._body
-
-
-def _resolve_server_import_path(raw_path: str | None) -> Path:
-    if not raw_path or not raw_path.strip():
-        raise HTTPException(400, "Server import path is required")
-    candidate = Path(raw_path.strip()).expanduser()
-    if not candidate.is_absolute():
-        candidate = IMPORT_DIR / candidate
-    resolved = candidate.resolve()
-    try:
-        resolved.relative_to(IMPORT_DIR)
-    except ValueError:
-        raise HTTPException(403, f"Server import path must be inside {IMPORT_DIR}")
-    if resolved.suffix.lower() != ".zip":
-        raise HTTPException(400, "Server import path must point to a .zip file")
-    if not resolved.is_file():
-        raise HTTPException(404, f"Server import file not found: {resolved}")
-    if resolved.stat().st_size > MAX_IMPORT_ZIP_BYTES:
-        raise HTTPException(413, f"Import package is too large. Max size is {MAX_IMPORT_ZIP_BYTES // (1024 * 1024)}MB")
-    return resolved
-
-
 @app.post("/api/stories/import", response_model=StoryOut)
 async def import_story(request: Request, db: Session = Depends(get_db)):
     body = await request.body()
@@ -1183,18 +1153,6 @@ async def import_story(request: Request, db: Session = Depends(get_db)):
 
 
 # ─── Color Mode ─────────────────────────────────────────────
-
-
-@app.post("/api/stories/import-from-path", response_model=StoryOut)
-async def import_story_from_path(payload: dict, db: Session = Depends(get_db)):
-    import_path = _resolve_server_import_path(str(payload.get("path") or ""))
-    logger.info("Importing story package from server path: %s", import_path)
-    try:
-        body = import_path.read_bytes()
-    except OSError as exc:
-        logger.warning("Failed to read server import file %s: %s", import_path, exc)
-        raise HTTPException(409, "Server import file is currently unavailable")
-    return await import_story(_ImportBodyRequest(body), db)
 
 
 def _color_mode_path(chapter_id: int) -> Path:
