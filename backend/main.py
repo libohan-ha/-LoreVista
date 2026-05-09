@@ -1,16 +1,19 @@
 import asyncio
 import contextlib
+import datetime
+import io
 import json
 import logging
 import os
 import shutil
 import uuid
+import zipfile
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
@@ -46,6 +49,7 @@ CORS_ORIGINS = [
 ]
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
 MAX_CHARACTER_PROFILE_CHARS = int(os.getenv("MAX_CHARACTER_PROFILE_CHARS", "20000"))
+MAX_IMPORT_ZIP_BYTES = int(os.getenv("MAX_IMPORT_ZIP_BYTES", str(500 * 1024 * 1024)))
 API_TOKEN = os.getenv("API_TOKEN", "").strip()
 
 app.add_middleware(
@@ -129,6 +133,18 @@ def _write_bytes_or_conflict(path: Path, data: bytes, label: str) -> None:
     except OSError as exc:
         logger.warning("Failed to write %s %s: %s", label, path, exc)
         raise HTTPException(409, f"{label} file is currently in use. Try again later")
+
+
+def _backend_path(relative_path: str | None) -> Path | None:
+    if not relative_path:
+        return None
+    path = (Path(__file__).resolve().parent / relative_path).resolve()
+    base = Path(__file__).resolve().parent.resolve()
+    try:
+        path.relative_to(base)
+    except ValueError:
+        return None
+    return path
 
 
 def _chapter_dir(chapter_id: int) -> Path:
@@ -815,7 +831,302 @@ async def delete_chapter_ref_image(chapter_id: int, filename: str, db: Session =
     }
 
 
+# --- Whole-story import / export -------------------------------------------------
+
+EXPORT_FORMAT = "lorevista.story.export"
+EXPORT_VERSION = 1
+ALLOWED_IMPORT_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _iso(dt: datetime.datetime | None) -> str | None:
+    return dt.isoformat() if dt else None
+
+
+def _safe_zip_name(name: str) -> str:
+    clean = name.replace("\\", "/").lstrip("/")
+    if not clean or clean.startswith("../") or "/../" in clean or clean == "..":
+        raise HTTPException(400, "Invalid export asset path")
+    return clean
+
+
+def _zip_add_path(zf: zipfile.ZipFile, added: set[str], zip_name: str, path: Path | None) -> str | None:
+    if not path or not path.exists() or not path.is_file():
+        return None
+    zip_name = _safe_zip_name(zip_name)
+    if zip_name not in added:
+        zf.write(path, zip_name)
+        added.add(zip_name)
+    return zip_name
+
+
+def _story_ref_paths_for_export(story: Story) -> list[Path]:
+    ref_dir = _story_ref_dir(story.id)
+    _migrate_legacy_ref(_legacy_story_ref_image(story.id), ref_dir)
+    paths = _list_ref_files(ref_dir)
+    db_ref = _story_ref_image_db_path(story)
+    if db_ref and db_ref not in paths:
+        paths.insert(0, db_ref)
+    return paths
+
+
+def _chapter_ref_paths_for_export(chapter: Chapter) -> list[Path]:
+    ref_dir = _chapter_ref_dir(chapter.id)
+    _migrate_legacy_ref(_legacy_chapter_ref_image(chapter.id), ref_dir)
+    paths = _list_ref_files(ref_dir)
+    db_ref = _chapter_ref_image_db_path(chapter)
+    if db_ref and db_ref not in paths:
+        paths.insert(0, db_ref)
+    return paths
+
+
+@app.get("/api/stories/{story_id}/export")
+def export_story(story_id: int, db: Session = Depends(get_db)):
+    story = db.get(Story, story_id)
+    if not story:
+        raise HTTPException(404, "Story not found")
+
+    buf = io.BytesIO()
+    manifest: dict = {
+        "format": EXPORT_FORMAT,
+        "version": EXPORT_VERSION,
+        "exported_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "story": {
+            "title": story.title,
+            "description": story.description or "",
+            "character_profiles": story.character_profiles or "",
+            "created_at": _iso(story.created_at),
+            "cover_image": None,
+            "ref_images": [],
+            "chapters": [],
+        },
+    }
+
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        added: set[str] = set()
+        cover_zip = _zip_add_path(
+            zf,
+            added,
+            f"assets/cover{Path(story.cover_image or '').suffix or '.png'}",
+            _backend_path(story.cover_image),
+        )
+        manifest["story"]["cover_image"] = cover_zip
+
+        for idx, path in enumerate(_story_ref_paths_for_export(story), start=1):
+            suffix = path.suffix.lower() or ".png"
+            asset = _zip_add_path(zf, added, f"assets/story_ref_images/{idx:03d}{suffix}", path)
+            if asset:
+                manifest["story"]["ref_images"].append(asset)
+
+        for chapter in story.chapters:
+            chapter_manifest = {
+                "chapter_number": chapter.chapter_number,
+                "novel_content": chapter.novel_content or "",
+                "content_source": chapter.content_source,
+                "scenes_text": chapter.scenes_text or "",
+                "character_profiles": chapter.character_profiles or "",
+                "color_mode": chapter.color_mode,
+                "image_count": chapter.image_count,
+                "created_at": _iso(chapter.created_at),
+                "messages": [
+                    {"role": msg.role, "content": msg.content, "created_at": _iso(msg.created_at)}
+                    for msg in chapter.messages
+                ],
+                "ref_images": [],
+                "images": [],
+            }
+            chapter_prefix = f"assets/chapters/{chapter.chapter_number:03d}"
+
+            for idx, path in enumerate(_chapter_ref_paths_for_export(chapter), start=1):
+                suffix = path.suffix.lower() or ".png"
+                asset = _zip_add_path(zf, added, f"{chapter_prefix}/ref_images/{idx:03d}{suffix}", path)
+                if asset:
+                    chapter_manifest["ref_images"].append(asset)
+
+            for img in chapter.images:
+                path = _backend_path(img.image_path)
+                suffix = path.suffix.lower() if path else ".png"
+                asset = _zip_add_path(zf, added, f"{chapter_prefix}/images/{img.image_number:03d}{suffix}", path)
+                chapter_manifest["images"].append({
+                    "image_number": img.image_number,
+                    "image_path": asset,
+                    "prompt": img.prompt or "",
+                    "created_at": _iso(img.created_at),
+                })
+
+            manifest["story"]["chapters"].append(chapter_manifest)
+
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+
+    buf.seek(0)
+    safe_title = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in story.title).strip("_") or f"story_{story.id}"
+    headers = {"Content-Disposition": f'attachment; filename="{safe_title}_lorevista.zip"'}
+    return StreamingResponse(buf, media_type="application/zip", headers=headers)
+
+
+def _require_zip_member(zf: zipfile.ZipFile, name: str | None) -> str | None:
+    if not name:
+        return None
+    clean = _safe_zip_name(name)
+    if clean not in zf.namelist():
+        raise HTTPException(400, f"Missing asset in import package: {clean}")
+    info = zf.getinfo(clean)
+    if info.is_dir():
+        raise HTTPException(400, f"Asset is a directory: {clean}")
+    if Path(clean).suffix.lower() not in ALLOWED_IMPORT_SUFFIXES:
+        raise HTTPException(400, f"Unsupported image type in import package: {clean}")
+    return clean
+
+
+def _copy_zip_asset(zf: zipfile.ZipFile, member: str | None, target: Path, label: str, written: list[Path]) -> bool:
+    member = _require_zip_member(zf, member)
+    if not member:
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        target.write_bytes(zf.read(member))
+    except OSError as exc:
+        logger.warning("Failed to import %s %s: %s", label, target, exc)
+        raise HTTPException(409, f"{label} file is currently in use. Try again later")
+    written.append(target)
+    return True
+
+
+@app.post("/api/stories/import", response_model=StoryOut)
+async def import_story(request: Request, db: Session = Depends(get_db)):
+    body = await request.body()
+    if not body:
+        raise HTTPException(400, "Import package is empty")
+    if len(body) > MAX_IMPORT_ZIP_BYTES:
+        raise HTTPException(413, f"Import package is too large. Max size is {MAX_IMPORT_ZIP_BYTES // (1024 * 1024)}MB")
+
+    written: list[Path] = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(body)) as zf:
+            if "manifest.json" not in zf.namelist():
+                raise HTTPException(400, "Import package is missing manifest.json")
+            total_uncompressed = sum(info.file_size for info in zf.infolist())
+            if total_uncompressed > MAX_IMPORT_ZIP_BYTES:
+                raise HTTPException(413, f"Import package expands beyond {MAX_IMPORT_ZIP_BYTES // (1024 * 1024)}MB")
+
+            try:
+                manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise HTTPException(400, "Invalid manifest.json")
+
+            if manifest.get("format") != EXPORT_FORMAT:
+                raise HTTPException(400, "Unsupported import package format")
+            if int(manifest.get("version", 0)) > EXPORT_VERSION:
+                raise HTTPException(400, "Import package was created by a newer app version")
+
+            story_data = manifest.get("story")
+            if not isinstance(story_data, dict):
+                raise HTTPException(400, "Invalid story data in manifest")
+            chapters_data = story_data.get("chapters", [])
+            if not isinstance(chapters_data, list):
+                raise HTTPException(400, "Invalid chapters data in manifest")
+            chapter_numbers = [int(ch.get("chapter_number", 0)) for ch in chapters_data if isinstance(ch, dict)]
+            if len(chapter_numbers) != len(set(chapter_numbers)):
+                raise HTTPException(400, "Import package contains duplicate chapter numbers")
+
+            story = Story(
+                title=str(story_data.get("title") or "Imported Story"),
+                description=str(story_data.get("description") or ""),
+                character_profiles=str(story_data.get("character_profiles") or ""),
+            )
+            db.add(story)
+            db.flush()
+
+            cover_member = _require_zip_member(zf, story_data.get("cover_image"))
+            if cover_member:
+                suffix = Path(cover_member).suffix.lower() or ".png"
+                filename = f"cover_{story.id}_{uuid.uuid4().hex[:8]}{suffix}"
+                target = manga_dir / "covers" / filename
+                _copy_zip_asset(zf, cover_member, target, "story cover", written)
+                story.cover_image = f"manga_outputs/covers/{filename}"
+
+            for ref_member in story_data.get("ref_images", []) or []:
+                member = _require_zip_member(zf, ref_member)
+                if not member:
+                    continue
+                suffix = Path(member).suffix.lower() or ".png"
+                filename = f"ref_{uuid.uuid4().hex[:8]}{suffix}"
+                _copy_zip_asset(zf, member, _story_ref_dir(story.id) / filename, "story ref image", written)
+
+            for chapter_data in sorted(chapters_data, key=lambda ch: int(ch.get("chapter_number", 0))):
+                if not isinstance(chapter_data, dict):
+                    raise HTTPException(400, "Invalid chapter entry in manifest")
+                chapter_number = int(chapter_data.get("chapter_number") or 0)
+                if chapter_number <= 0:
+                    raise HTTPException(400, "Chapter numbers must be positive")
+
+                chapter = Chapter(
+                    story_id=story.id,
+                    chapter_number=chapter_number,
+                    novel_content=str(chapter_data.get("novel_content") or ""),
+                    content_source=chapter_data.get("content_source"),
+                    scenes_text=str(chapter_data.get("scenes_text") or ""),
+                    character_profiles=str(chapter_data.get("character_profiles") or "") or None,
+                    color_mode=chapter_data.get("color_mode") if chapter_data.get("color_mode") in ("bw", "color") else None,
+                    image_count=chapter_data.get("image_count") if chapter_data.get("image_count") in ALLOWED_IMAGE_COUNTS else None,
+                )
+                db.add(chapter)
+                db.flush()
+
+                for msg_data in chapter_data.get("messages", []) or []:
+                    if not isinstance(msg_data, dict):
+                        continue
+                    role = str(msg_data.get("role") or "")
+                    content = str(msg_data.get("content") or "")
+                    if role in ("user", "assistant", "system") and content:
+                        db.add(ChatMessage(chapter_id=chapter.id, role=role, content=content))
+
+                for ref_member in chapter_data.get("ref_images", []) or []:
+                    member = _require_zip_member(zf, ref_member)
+                    if not member:
+                        continue
+                    suffix = Path(member).suffix.lower() or ".png"
+                    filename = f"ref_{uuid.uuid4().hex[:8]}{suffix}"
+                    _copy_zip_asset(zf, member, _chapter_ref_dir(chapter.id) / filename, "chapter ref image", written)
+
+                for img_data in sorted(chapter_data.get("images", []) or [], key=lambda img: int(img.get("image_number", 0))):
+                    if not isinstance(img_data, dict):
+                        continue
+                    image_number = int(img_data.get("image_number") or 0)
+                    if image_number <= 0:
+                        continue
+                    member = _require_zip_member(zf, img_data.get("image_path"))
+                    if not member:
+                        continue
+                    suffix = Path(member).suffix.lower() or ".png"
+                    filename = f"panel_{image_number:02d}_{uuid.uuid4().hex[:8]}{suffix}"
+                    _copy_zip_asset(zf, member, _chapter_dir(chapter.id) / filename, "manga image", written)
+                    db.add(MangaImage(
+                        chapter_id=chapter.id,
+                        image_number=image_number,
+                        image_path=f"manga_outputs/chapter_{chapter.id}/{filename}",
+                        prompt=str(img_data.get("prompt") or ""),
+                    ))
+
+            if not chapters_data:
+                db.add(Chapter(story_id=story.id, chapter_number=1))
+
+            db.commit()
+            db.refresh(story)
+            return story
+    except zipfile.BadZipFile:
+        db.rollback()
+        raise HTTPException(400, "Import package is not a valid zip file")
+    except Exception:
+        db.rollback()
+        for path in written:
+            with contextlib.suppress(OSError):
+                if path.exists():
+                    path.unlink()
+        raise
+
+
 # ─── Color Mode ─────────────────────────────────────────────
+
 
 def _color_mode_path(chapter_id: int) -> Path:
     return Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter_id}" / "color_mode.txt"

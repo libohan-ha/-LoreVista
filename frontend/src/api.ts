@@ -120,6 +120,34 @@ export async function deleteStory(storyId: number): Promise<void> {
   if (!res.ok) throw new Error(await res.text());
 }
 
+export async function exportStory(story: Story): Promise<void> {
+  const res = await fetch(`${BASE}/api/stories/${story.id}/export`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const safeTitle = (story.title || `story-${story.id}`).replace(/[\\/:*?"<>|]+/g, '_');
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${safeTitle}_lorevista.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+export async function importStoryPackage(file: File): Promise<Story> {
+  const res = await fetch(`${BASE}/api/stories/import`, {
+    method: 'POST',
+    headers: {
+      ...apiHeaders(),
+      'Content-Type': 'application/zip',
+    },
+    body: file,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function uploadStoryCover(storyId: number, base64: string): Promise<string> {
   const res = await fetch(`${BASE}/api/stories/${storyId}/upload-cover`, {
     method: 'POST',
