@@ -49,6 +49,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const [lightboxIdx, setLightboxIdx] = useState<number>(-1);
   const [errorMsg, setErrorMsg] = useState('');
   const [scenes, setScenes] = useState<string[]>([]);
+  const [expandedScenes, setExpandedScenes] = useState<Set<number>>(() => new Set());
   const [editingIdx, setEditingIdx] = useState<number>(-1);
   const [editText, setEditText] = useState('');
   const [savingScenes, setSavingScenes] = useState(false);
@@ -95,6 +96,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     setErrorMsg('');
     setLightboxIdx(-1);
     setScenes([]);
+    setExpandedScenes(new Set());
     setEditingIdx(-1);
     setRegenIdx(-1);
     setCharText('');
@@ -214,6 +216,15 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     updated[idx] = editText;
     setScenes(updated);
     setEditingIdx(-1);
+  };
+
+  const toggleSceneExpanded = (idx: number) => {
+    setExpandedScenes((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
   };
 
   const handleSaveAllScenes = async () => {
@@ -790,9 +801,18 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                         autoFocus
                       />
                     ) : (
-                      <p className="flex-1 text-xs text-gray-400 leading-relaxed line-clamp-2 hover:line-clamp-none cursor-default">
-                        {scene}
-                      </p>
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-xs text-gray-400 leading-relaxed ${expandedScenes.has(idx) ? '' : 'line-clamp-2'}`}>
+                          {scene}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => toggleSceneExpanded(idx)}
+                          className="mt-1 text-xs text-violet-400 hover:text-violet-300 transition-colors"
+                        >
+                          {expandedScenes.has(idx) ? '收起' : '展开'}
+                        </button>
+                      </div>
                     )}
                     <div className="shrink-0 flex gap-1">
                       {editingIdx === idx ? (
@@ -821,9 +841,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
 
         {/* Images gallery with inline scene editor */}
         <div className="space-y-6">
-          {gallerySlots.map(({ image_number, scene, img }) => {
-            const sceneIdx = image_number - 1;
-            const isEditing = editingIdx === sceneIdx;
+          {gallerySlots.map(({ image_number, img }) => {
             const isRegenerating = regenIdx === image_number;
             return (
               <div key={image_number} className="group">
@@ -845,6 +863,18 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                   <div className="absolute top-3 left-3 px-2 py-0.5 bg-black/70 rounded text-[10px] text-gray-300 font-mono">
                     {image_number}/{imageCount}
                   </div>
+                  {scenes[image_number - 1] && !isRegenerating && !generating && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRegenImage(image_number);
+                      }}
+                      className="absolute top-3 right-3 p-1.5 rounded-md bg-black/70 hover:bg-amber-500 text-white hover:text-gray-950 transition-colors"
+                      title="重新生成此图"
+                    >
+                      <RefreshCw size={12} />
+                    </button>
+                  )}
                   {isRegenerating && (
                     <div className="absolute inset-0 flex items-center justify-center">
                       <div className="flex flex-col items-center gap-2">
@@ -869,47 +899,6 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                     <span className="text-xs">{generating ? '等待生成…' : '未生成'}</span>
                   </div>
                 </div>
-                )}
-                {/* Inline scene editor under image */}
-                {scene && (
-                  <div className="mt-2 rounded-lg border border-gray-800 bg-gray-900/40 p-2.5">
-                    <div className="flex items-start gap-2">
-                      {isEditing ? (
-                        <textarea
-                          value={editText}
-                          onChange={(e) => setEditText(e.target.value)}
-                          className="flex-1 bg-gray-800 text-xs text-gray-200 rounded p-2 resize-none outline-none border border-gray-700 focus:border-violet-500 leading-relaxed"
-                          rows={3}
-                          autoFocus
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      ) : (
-                        <p className="flex-1 text-xs text-gray-500 leading-relaxed line-clamp-2 group-hover:line-clamp-none">
-                          {scene}
-                        </p>
-                      )}
-                      <div className="shrink-0 flex items-center gap-1">
-                        {isEditing ? (
-                          <>
-                            <button onClick={() => handleSceneSave(sceneIdx)} className="p-1 rounded hover:bg-gray-700 text-green-400 transition-colors" title="保存"><Check size={13} /></button>
-                            <button onClick={() => setEditingIdx(-1)} className="p-1 rounded hover:bg-gray-700 text-gray-500 transition-colors" title="取消"><X size={13} /></button>
-                          </>
-                        ) : (
-                          <>
-                            <button onClick={() => handleSceneEdit(sceneIdx)} className="p-1 rounded hover:bg-gray-700 text-gray-600 hover:text-gray-300 transition-colors" title="编辑分镜"><Pencil size={12} /></button>
-                            <button
-                              onClick={() => handleRegenImage(image_number)}
-                              disabled={isRegenerating || generating}
-                              className="p-1 rounded hover:bg-gray-700 text-gray-600 hover:text-amber-400 disabled:opacity-30 transition-colors"
-                              title="重新生成此图"
-                            >
-                              <RefreshCw size={12} />
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  </div>
                 )}
               </div>
             );
@@ -976,12 +965,6 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             >
               <ChevronDown size={20} />
             </button>
-          )}
-          {/* Prompt */}
-          {lightboxImg.prompt && (
-            <div className="absolute bottom-4 left-4 right-4 text-center text-sm text-gray-400 bg-black/60 rounded-lg px-4 py-2">
-              {lightboxImg.prompt}
-            </div>
           )}
         </div>
       )}
@@ -1061,7 +1044,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                               setErrorMsg(`删除垫图失败: ${err.message}`);
                             }
                           }}
-                          className="absolute top-1.5 right-1.5 p-1 rounded-md bg-red-600/80 hover:bg-red-500 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="absolute top-1.5 right-1.5 p-1 rounded-md bg-red-600 hover:bg-red-500 text-white shadow-lg transition-colors"
                           title="删除"
                         >
                           <Trash2 size={12} />
