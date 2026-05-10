@@ -38,13 +38,27 @@ function parseChapterNumberHash(): number | null {
 }
 
 function useIsMobile() {
-  const [isMobile, setIsMobile] = useState(window.innerWidth <= MOBILE_BREAKPOINT);
+  const read = () =>
+    window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`).matches ||
+    window.matchMedia('(pointer: coarse)').matches;
+  const [isMobile, setIsMobile] = useState(read);
+
   useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`);
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
+    const widthMq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`);
+    const touchMq = window.matchMedia('(pointer: coarse)');
+    const sync = () => setIsMobile(read());
+    widthMq.addEventListener('change', sync);
+    touchMq.addEventListener('change', sync);
+    window.addEventListener('orientationchange', sync);
+    window.addEventListener('resize', sync);
+    return () => {
+      widthMq.removeEventListener('change', sync);
+      touchMq.removeEventListener('change', sync);
+      window.removeEventListener('orientationchange', sync);
+      window.removeEventListener('resize', sync);
+    };
   }, []);
+
   return isMobile;
 }
 
