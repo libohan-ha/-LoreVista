@@ -37,8 +37,18 @@ function parseChapterNumberHash(): number | null {
   return match ? Number(match[1]) : null;
 }
 
+function replaceHash(hash: string) {
+  const next = `${window.location.pathname}${window.location.search}${hash ? `#${hash}` : ''}`;
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (next !== current) {
+    window.history.replaceState(null, '', next);
+  }
+}
+
 function useIsMobile() {
   const read = () =>
+    navigator.maxTouchPoints > 0 ||
+    window.matchMedia('(any-pointer: coarse)').matches ||
     window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`).matches ||
     window.matchMedia('(pointer: coarse)').matches;
   const [isMobile, setIsMobile] = useState(read);
@@ -46,14 +56,22 @@ function useIsMobile() {
   useEffect(() => {
     const widthMq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`);
     const touchMq = window.matchMedia('(pointer: coarse)');
-    const sync = () => setIsMobile(read());
+    const anyTouchMq = window.matchMedia('(any-pointer: coarse)');
+    let frame = 0;
+    const sync = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => setIsMobile(read()));
+    };
     widthMq.addEventListener('change', sync);
     touchMq.addEventListener('change', sync);
+    anyTouchMq.addEventListener('change', sync);
     window.addEventListener('orientationchange', sync);
     window.addEventListener('resize', sync);
     return () => {
+      window.cancelAnimationFrame(frame);
       widthMq.removeEventListener('change', sync);
       touchMq.removeEventListener('change', sync);
+      anyTouchMq.removeEventListener('change', sync);
       window.removeEventListener('orientationchange', sync);
       window.removeEventListener('resize', sync);
     };
@@ -233,13 +251,14 @@ function App() {
 
   const persistSelectedChapter = (chapter: Chapter | null | undefined) => {
     if (!chapter) return;
-    window.location.hash = chapterHash(chapter.chapter_number);
+    replaceHash(chapterHash(chapter.chapter_number));
     localStorage.setItem(LS_CHAPTER_ID, String(chapter.id));
     localStorage.removeItem(LS_CHAPTER_IDX);
   };
 
   const setCurrentIdx = (idx: number | ((prev: number) => number), sourceChapters = chapters) => {
     _setCurrentIdx((prev) => {
+      if (sourceChapters.length === 0) return 0;
       const rawNext = typeof idx === 'function' ? idx(prev) : idx;
       const next = Math.max(0, Math.min(rawNext, sourceChapters.length - 1));
       persistSelectedChapter(sourceChapters[next]);
@@ -317,7 +336,7 @@ function App() {
     setStory(null);
     setChapters([]);
     _setCurrentIdx(0);
-    window.location.hash = '';
+    replaceHash('');
     localStorage.removeItem(LS_STORY_ID);
     localStorage.removeItem(LS_CHAPTER_ID);
     localStorage.removeItem(LS_CHAPTER_IDX);
