@@ -841,7 +841,9 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
 
         {/* Images gallery with inline scene editor */}
         <div className="space-y-6">
-          {gallerySlots.map(({ image_number, img }) => {
+          {gallerySlots.map(({ image_number, scene, img }) => {
+            const sceneIdx = image_number - 1;
+            const isEditing = editingIdx === sceneIdx;
             const isRegenerating = regenIdx === image_number;
             return (
               <div key={image_number} className="group">
@@ -899,6 +901,44 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                     <span className="text-xs">{generating ? '等待生成…' : '未生成'}</span>
                   </div>
                 </div>
+                )}
+                {scene && (
+                  <div className="mt-2 rounded-lg border border-gray-800 bg-gray-900/40 p-2.5">
+                    <div className="flex items-start gap-2">
+                      {isEditing ? (
+                        <textarea
+                          value={editText}
+                          onChange={(e) => setEditText(e.target.value)}
+                          className="flex-1 bg-gray-800 text-xs text-gray-200 rounded p-2 resize-none outline-none border border-gray-700 focus:border-violet-500 leading-relaxed"
+                          rows={3}
+                          autoFocus
+                        />
+                      ) : (
+                        <div className="flex-1 min-w-0">
+                          <p className={`text-xs text-gray-500 leading-relaxed ${expandedScenes.has(sceneIdx) ? '' : 'line-clamp-2'}`}>
+                            {scene}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => toggleSceneExpanded(sceneIdx)}
+                            className="mt-1 text-xs text-violet-400 hover:text-violet-300 transition-colors"
+                          >
+                            {expandedScenes.has(sceneIdx) ? '收起' : '展开'}
+                          </button>
+                        </div>
+                      )}
+                      <div className="shrink-0 flex items-center gap-1">
+                        {isEditing ? (
+                          <>
+                            <button onClick={() => handleSceneSave(sceneIdx)} className="p-1 rounded hover:bg-gray-700 text-green-400 transition-colors" title="保存"><Check size={13} /></button>
+                            <button onClick={() => setEditingIdx(-1)} className="p-1 rounded hover:bg-gray-700 text-gray-500 transition-colors" title="取消"><X size={13} /></button>
+                          </>
+                        ) : (
+                          <button onClick={() => handleSceneEdit(sceneIdx)} className="p-1 rounded hover:bg-gray-700 text-gray-600 hover:text-gray-300 transition-colors" title="编辑分镜"><Pencil size={12} /></button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 )}
               </div>
             );
