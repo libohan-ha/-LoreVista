@@ -25,7 +25,7 @@ type MobileTab = 'chat' | 'manga';
 const LS_STORY_ID = 'lorevista.currentStoryId';
 const LS_CHAPTER_ID = 'lorevista.currentChapterId';
 const LS_CHAPTER_IDX = 'lorevista.currentChapterIdx';
-const MOBILE_BREAKPOINT = 768;
+const MOBILE_BREAKPOINT = 1024;
 
 function chapterHash(chapterNumber: number) {
   return `chapter-${chapterNumber}`;
@@ -38,9 +38,9 @@ function parseChapterNumberHash(): number | null {
 }
 
 function useIsMobile() {
-  const [isMobile, setIsMobile] = useState(window.innerWidth < MOBILE_BREAKPOINT);
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= MOBILE_BREAKPOINT);
   useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
+    const mq = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`);
     const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);
@@ -455,8 +455,8 @@ function App() {
           <div className="w-px h-5 bg-gray-800 shrink-0" />
           <button
             onClick={() => setChapterNavOpen((open) => !open)}
-            className="hidden md:flex items-center justify-center w-8 h-8 text-gray-500 hover:text-white
-                       hover:bg-gray-800 rounded-lg transition-colors shrink-0"
+            className={`${isMobile ? 'hidden' : 'flex'} items-center justify-center w-8 h-8 text-gray-500 hover:text-white
+                       hover:bg-gray-800 rounded-lg transition-colors shrink-0`}
             title={chapterNavOpen ? '收起目录' : '展开目录'}
             aria-label={chapterNavOpen ? '收起目录' : '展开目录'}
           >
