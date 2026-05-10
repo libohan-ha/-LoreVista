@@ -560,6 +560,7 @@ export function generateMangaStream(
       const decoder = new TextDecoder();
       let buffer = '';
       let currentEvent = 'message';
+      let receivedTerminalEvent = false;
       const handleLine = (line: string) => {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith(':')) return;
@@ -570,6 +571,7 @@ export function generateMangaStream(
           try {
             const data = JSON.parse(dataStr);
             const eventType = currentEvent as MangaProgress['type'];
+            if (eventType === 'done' || eventType === 'error') receivedTerminalEvent = true;
             onEvent({ type: eventType, data });
           } catch {
             // ignore unparseable data
@@ -590,6 +592,9 @@ export function generateMangaStream(
         }
       }
       if (buffer.trim()) handleLine(buffer);
+      if (!receivedTerminalEvent && !controller.signal.aborted) {
+        onEvent({ type: 'error', data: { error: '生成连接已断开，请稍后重试' } });
+      }
     })
     .catch((err) => {
       if (err.name !== 'AbortError') {
