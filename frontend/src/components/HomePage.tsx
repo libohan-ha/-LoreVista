@@ -695,7 +695,7 @@ export default function HomePage({ onSelectStory }: Props) {
                       </div>
                       <button
                         onClick={() => handleRefDelete(img.filename)}
-                        className="absolute top-1.5 right-1.5 p-1 rounded-md bg-red-600/80 hover:bg-red-500 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="absolute top-1.5 right-1.5 p-1 rounded-md bg-red-600 hover:bg-red-500 text-white shadow-lg transition-colors"
                         title="删除"
                       >
                         <Trash2 size={12} />
