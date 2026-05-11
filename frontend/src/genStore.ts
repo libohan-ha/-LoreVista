@@ -49,7 +49,11 @@ export const genStore = {
   pushImage(chapterId: number, img: GenImage) {
     const cur = states.get(chapterId);
     if (!cur) return;
-    states.set(chapterId, { ...cur, images: [...cur.images, img], lastEventAt: Date.now() });
+    const images = cur.images
+      .filter((existing) => existing.image_number !== img.image_number)
+      .concat(img)
+      .sort((a, b) => a.image_number - b.image_number);
+    states.set(chapterId, { ...cur, images, lastEventAt: Date.now() });
     emit();
   },
   finish(chapterId: number, errorMsg?: string) {
