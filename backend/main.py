@@ -14,7 +14,7 @@ from urllib.parse import quote
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
@@ -70,6 +70,74 @@ async def _missing_api_key_handler(request: Request, exc: MissingApiKeyError):
 # Serve generated manga images as static files
 manga_dir = Path(__file__).resolve().parent / "manga_outputs"
 manga_dir.mkdir(parents=True, exist_ok=True)
+thumb_dir = manga_dir / ".thumbs"
+THUMBNAIL_WIDTHS = (320, 480, 720, 960, 1280)
+THUMBNAIL_QUALITY = 76
+THUMBNAIL_CACHE_HEADERS = {"Cache-Control": "public, max-age=31536000, immutable"}
+
+
+def _nearest_thumbnail_width(width: int) -> int:
+    if width <= THUMBNAIL_WIDTHS[0]:
+        return THUMBNAIL_WIDTHS[0]
+    if width >= THUMBNAIL_WIDTHS[-1]:
+        return THUMBNAIL_WIDTHS[-1]
+    return min(THUMBNAIL_WIDTHS, key=lambda allowed: abs(allowed - width))
+
+
+def _manga_media_path(rel_path: str) -> Path:
+    rel = Path(rel_path)
+    if rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
+        raise HTTPException(400, "Invalid image path")
+    if rel.parts and rel.parts[0] == ".thumbs":
+        raise HTTPException(400, "Invalid image path")
+    source = (manga_dir / rel).resolve()
+    try:
+        source.relative_to(manga_dir.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid image path")
+    if source.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+        raise HTTPException(415, "Unsupported image type")
+    if not source.exists() or not source.is_file():
+        raise HTTPException(404, "Image not found")
+    return source
+
+
+@app.get("/static/manga/_thumb/{rel_path:path}", include_in_schema=False)
+def manga_thumbnail(rel_path: str, w: int = 720):
+    source = _manga_media_path(rel_path)
+    width = _nearest_thumbnail_width(w)
+    rel = source.relative_to(manga_dir.resolve())
+    cache_path = thumb_dir / f"w{width}" / rel.parent / f"{rel.name}.webp"
+
+    if cache_path.exists() and cache_path.stat().st_mtime >= source.stat().st_mtime:
+        return FileResponse(cache_path, media_type="image/webp", headers=THUMBNAIL_CACHE_HEADERS)
+
+    try:
+        from PIL import Image, ImageOps, UnidentifiedImageError
+
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = cache_path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+        with Image.open(source) as img:
+            img = ImageOps.exif_transpose(img)
+            if img.width > width:
+                ratio = width / img.width
+                img = img.resize((width, max(1, int(img.height * ratio))), Image.Resampling.LANCZOS)
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGBA" if "A" in img.getbands() else "RGB")
+            img.save(tmp_path, format="WEBP", quality=THUMBNAIL_QUALITY, method=6)
+        tmp_path.replace(cache_path)
+    except UnidentifiedImageError:
+        raise HTTPException(415, "Unsupported image type")
+    except Exception as exc:
+        logger.warning("Failed to create thumbnail for %s: %s", source, exc)
+        if "tmp_path" in locals() and tmp_path.exists():
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
+        return FileResponse(source, headers={"Cache-Control": "public, max-age=86400"})
+
+    return FileResponse(cache_path, media_type="image/webp", headers=THUMBNAIL_CACHE_HEADERS)
+
+
 app.mount("/static/manga", StaticFiles(directory=str(manga_dir)), name="manga")
 
 

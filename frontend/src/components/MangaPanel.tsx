@@ -12,13 +12,13 @@ import {
   getChapterRefImages,
   addChapterRefImage,
   deleteChapterRefImage,
-  refImageUrl,
   getColorMode,
   setColorMode,
   getImageCount,
   setImageCount,
   ALLOWED_IMAGE_COUNTS,
   mangaImageUrl,
+  mangaThumbUrl,
   type Chapter,
   type MangaProgress,
   type ColorMode,
@@ -857,10 +857,11 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                   }}
                 >
                   <img
-                    src={mangaImageUrl(img.image_path, isRegenerating ? Date.now() : undefined)}
+                    src={mangaThumbUrl(img.image_path, 1280, isRegenerating ? Date.now() : undefined)!}
                     alt={`Panel ${image_number}`}
                     className={`w-full object-contain ${isRegenerating ? 'opacity-30' : ''}`}
                     loading="lazy"
+                    decoding="async"
                   />
                   <div className="absolute top-3 left-3 px-2 py-0.5 bg-black/70 rounded text-[10px] text-gray-300 font-mono">
                     {image_number}/{imageCount}
@@ -1057,9 +1058,11 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                       className="relative group aspect-square rounded-lg overflow-hidden border border-gray-800 bg-gray-950"
                     >
                       <img
-                        src={`${refImageUrl(img.image_path)}?t=${chapter?.id ?? ''}`}
+                        src={mangaThumbUrl(img.image_path, 480, img.filename)!}
                         alt={img.filename}
                         className="w-full h-full object-cover"
+                        loading="lazy"
+                        decoding="async"
                       />
                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-end justify-between p-2 pointer-events-none">
                         <span className="text-[10px] text-white/80 bg-black/60 px-1.5 py-0.5 rounded">
