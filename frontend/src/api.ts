@@ -397,7 +397,9 @@ export async function saveStoryCharacters(storyId: number, characters: string): 
 }
 
 // Chapter-level (with source info)
-export async function getCharacters(chapterId: number): Promise<{ characters: string; source: 'chapter' | 'story' | 'none' }> {
+export type CharacterSource = 'chapter' | 'asset_group' | 'story' | 'none';
+
+export async function getCharacters(chapterId: number): Promise<{ characters: string; source: CharacterSource; group_id?: number; group_name?: string }> {
   const res = await fetch(`${BASE}/api/chapters/${chapterId}/characters`, { headers: apiHeaders() });
   if (!res.ok) throw new Error(await res.text());
   return await res.json();
@@ -422,7 +424,7 @@ export async function resetChapterCharacters(chapterId: number): Promise<void> {
 
 // ─── Reference Images (垫图，支持多图) ────────────────────────
 
-export type RefSource = 'chapter' | 'story' | 'none';
+export type RefSource = 'chapter' | 'asset_group' | 'story' | 'none';
 
 export interface RefImage {
   filename: string;
@@ -434,10 +436,98 @@ export interface RefImagesPayload {
   images: RefImage[];
   max: number;
   source?: RefSource;
+  group_id?: number;
+  group_name?: string;
 }
 
 export function refImageUrl(imagePath: string): string {
   return `${BASE}/static/manga/${mangaStaticPath(imagePath)}`;
+}
+
+export interface AssetGroup {
+  id: number | null;
+  name: string;
+  is_default: boolean;
+  character_profiles: string;
+  has_character_profiles: boolean;
+  ref_images: RefImage[];
+  ref_count: number;
+}
+
+export interface AssetGroupsPayload {
+  groups: AssetGroup[];
+  max: number;
+  selected_group_id?: number | null;
+}
+
+export async function getStoryAssetGroups(storyId: number): Promise<AssetGroupsPayload> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/asset-groups`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createStoryAssetGroup(storyId: number, name: string): Promise<{ group: AssetGroup; groups: AssetGroup[] }> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/asset-groups`, {
+    method: 'POST',
+    headers: apiHeaders(true),
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateStoryAssetGroup(storyId: number, groupId: number, data: { name?: string; characters?: string }): Promise<{ group: AssetGroup; groups: AssetGroup[] }> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/asset-groups/${groupId}`, {
+    method: 'PUT',
+    headers: apiHeaders(true),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteStoryAssetGroup(storyId: number, groupId: number): Promise<{ groups: AssetGroup[] }> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/asset-groups/${groupId}`, {
+    method: 'DELETE',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function addStoryAssetGroupRefImage(storyId: number, groupId: number, base64: string): Promise<RefImagesPayload> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/asset-groups/${groupId}/ref-images`, {
+    method: 'POST',
+    headers: apiHeaders(true),
+    body: JSON.stringify({ image: base64 }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteStoryAssetGroupRefImage(storyId: number, groupId: number, filename: string): Promise<RefImagesPayload> {
+  const res = await fetch(
+    `${BASE}/api/stories/${storyId}/asset-groups/${groupId}/ref-images/${encodeURIComponent(filename)}`,
+    { method: 'DELETE', headers: apiHeaders() },
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getChapterAssetGroup(chapterId: number): Promise<AssetGroupsPayload> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/asset-group`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function setChapterAssetGroup(chapterId: number, groupId: number | null): Promise<AssetGroupsPayload> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/asset-group`, {
+    method: 'PUT',
+    headers: apiHeaders(true),
+    body: JSON.stringify({ group_id: groupId }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 // Story-level

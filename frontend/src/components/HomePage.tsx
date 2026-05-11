@@ -23,13 +23,18 @@ import {
   importStoryPackage,
   uploadStoryCover,
   mangaThumbUrl,
-  getStoryCharacters,
   saveStoryCharacters,
-  getStoryRefImages,
   addStoryRefImage,
   deleteStoryRefImage,
+  getStoryAssetGroups,
+  createStoryAssetGroup,
+  updateStoryAssetGroup,
+  deleteStoryAssetGroup,
+  addStoryAssetGroupRefImage,
+  deleteStoryAssetGroupRefImage,
   type Story,
   type RefImage,
+  type AssetGroup,
 } from '../api';
 
 interface Props {
@@ -60,36 +65,159 @@ export default function HomePage({ onSelectStory }: Props) {
   // Character card modal
   const [charModalStoryId, setCharModalStoryId] = useState<number | null>(null);
   const [charModalText, setCharModalText] = useState('');
-  const [charModalLoading, setCharModalLoading] = useState(false);
+  const [charModalLoading] = useState(false);
   const [charModalSaving, setCharModalSaving] = useState(false);
   const [storyCharFlags, setStoryCharFlags] = useState<Record<number, boolean>>({});
-  const charModalRequestRef = useRef(0);
 
   // Ref images modal (multi)
   const [refModalStoryId, setRefModalStoryId] = useState<number | null>(null);
   const [refModalImages, setRefModalImages] = useState<RefImage[]>([]);
   const [refModalMax, setRefModalMax] = useState(4);
-  const [refModalLoading, setRefModalLoading] = useState(false);
+  const [refModalLoading] = useState(false);
   const [refModalUploading, setRefModalUploading] = useState(false);
   const [storyRefFlags, setStoryRefFlags] = useState<Record<number, boolean>>({});
-  const refModalRequestRef = useRef(0);
   const refModalFileRef = useRef<HTMLInputElement>(null);
 
-  const openCharModal = async (storyId: number) => {
-    const requestId = ++charModalRequestRef.current;
-    setCharModalStoryId(storyId);
-    setCharModalText('');
-    setCharModalLoading(true);
+  // Story global asset groups
+  const [assetModalStoryId, setAssetModalStoryId] = useState<number | null>(null);
+  const [assetGroups, setAssetGroups] = useState<AssetGroup[]>([]);
+  const [assetSelectedKey, setAssetSelectedKey] = useState<string>('default');
+  const [assetDraftName, setAssetDraftName] = useState('');
+  const [assetDraftChars, setAssetDraftChars] = useState('');
+  const [assetModalLoading, setAssetModalLoading] = useState(false);
+  const [assetModalSaving, setAssetModalSaving] = useState(false);
+  const [assetRefUploading, setAssetRefUploading] = useState(false);
+  const assetModalRequestRef = useRef(0);
+  const assetFileRef = useRef<HTMLInputElement>(null);
+
+  const activeAssetGroup = assetGroups.find((g) => (g.id === null ? 'default' : String(g.id)) === assetSelectedKey) ?? assetGroups[0];
+  const updateAssetFlags = (storyId: number, groups: AssetGroup[]) => {
+    setStoryCharFlags((prev) => ({ ...prev, [storyId]: groups.some((g) => !!g.character_profiles?.trim()) }));
+    setStoryRefFlags((prev) => ({ ...prev, [storyId]: groups.some((g) => g.ref_count > 0) }));
+  };
+
+  const syncActiveAssetDraft = (group: AssetGroup | undefined) => {
+    setAssetDraftName(group?.name ?? '');
+    setAssetDraftChars(group?.character_profiles ?? '');
+  };
+
+  const openAssetGroupModal = async (storyId: number) => {
+    const requestId = ++assetModalRequestRef.current;
+    setAssetModalStoryId(storyId);
+    setAssetGroups([]);
+    setAssetSelectedKey('default');
+    setAssetModalLoading(true);
     try {
-      const text = await getStoryCharacters(storyId);
-      if (charModalRequestRef.current !== requestId) return;
-      setCharModalText(text);
-    } catch {
-      if (charModalRequestRef.current !== requestId) return;
-      setCharModalText('');
+      const payload = await getStoryAssetGroups(storyId);
+      if (assetModalRequestRef.current !== requestId) return;
+      setAssetGroups(payload.groups);
+      setRefModalMax(payload.max);
+      syncActiveAssetDraft(payload.groups[0]);
+      updateAssetFlags(storyId, payload.groups);
+    } catch (err: any) {
+      if (assetModalRequestRef.current !== requestId) return;
+      alert(`加载设定组失败: ${err.message}`);
     } finally {
-      if (charModalRequestRef.current !== requestId) return;
-      setCharModalLoading(false);
+      if (assetModalRequestRef.current !== requestId) return;
+      setAssetModalLoading(false);
+    }
+  };
+
+  const selectAssetGroup = (group: AssetGroup) => {
+    setAssetSelectedKey(group.id === null ? 'default' : String(group.id));
+    syncActiveAssetDraft(group);
+  };
+
+  const replaceAssetGroup = (groupId: number | null, patch: Partial<AssetGroup>) => {
+    setAssetGroups((prev) => prev.map((g) => (g.id === groupId ? { ...g, ...patch } : g)));
+  };
+
+  const saveAssetGroup = async () => {
+    if (assetModalStoryId === null || !activeAssetGroup) return;
+    setAssetModalSaving(true);
+    try {
+      if (activeAssetGroup.id === null) {
+        await saveStoryCharacters(assetModalStoryId, assetDraftChars);
+        const next = { ...activeAssetGroup, character_profiles: assetDraftChars, has_character_profiles: !!assetDraftChars.trim() };
+        replaceAssetGroup(null, next);
+        updateAssetFlags(assetModalStoryId, assetGroups.map((g) => (g.id === null ? next : g)));
+      } else {
+        const result = await updateStoryAssetGroup(assetModalStoryId, activeAssetGroup.id, {
+          name: assetDraftName,
+          characters: assetDraftChars,
+        });
+        setAssetGroups(result.groups);
+        const next = result.groups.find((g) => g.id === activeAssetGroup.id);
+        syncActiveAssetDraft(next);
+        updateAssetFlags(assetModalStoryId, result.groups);
+      }
+    } catch (err: any) {
+      alert(`保存设定组失败: ${err.message}`);
+    } finally {
+      setAssetModalSaving(false);
+    }
+  };
+
+  const addAssetGroup = async () => {
+    if (assetModalStoryId === null) return;
+    try {
+      const result = await createStoryAssetGroup(assetModalStoryId, `设定组 ${Math.max(assetGroups.length, 1)}`);
+      setAssetGroups(result.groups);
+      setAssetSelectedKey(String(result.group.id));
+      syncActiveAssetDraft(result.group);
+      updateAssetFlags(assetModalStoryId, result.groups);
+    } catch (err: any) {
+      alert(`新增设定组失败: ${err.message}`);
+    }
+  };
+
+  const removeAssetGroup = async () => {
+    if (assetModalStoryId === null || !activeAssetGroup?.id) return;
+    if (!confirm(`删除「${activeAssetGroup.name}」？已选择该组的章节会恢复为默认组。`)) return;
+    try {
+      const result = await deleteStoryAssetGroup(assetModalStoryId, activeAssetGroup.id);
+      setAssetGroups(result.groups);
+      setAssetSelectedKey('default');
+      syncActiveAssetDraft(result.groups[0]);
+      updateAssetFlags(assetModalStoryId, result.groups);
+    } catch (err: any) {
+      alert(`删除设定组失败: ${err.message}`);
+    }
+  };
+
+  const handleAssetRefUpload = async (file: File) => {
+    if (assetModalStoryId === null || !activeAssetGroup) return;
+    setAssetRefUploading(true);
+    try {
+      const reader = new FileReader();
+      const b64 = await new Promise<string>((resolve) => {
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.readAsDataURL(file);
+      });
+      const r = activeAssetGroup.id === null
+        ? await addStoryRefImage(assetModalStoryId, b64)
+        : await addStoryAssetGroupRefImage(assetModalStoryId, activeAssetGroup.id, b64);
+      const patch = { ref_images: r.images, ref_count: r.images.length };
+      replaceAssetGroup(activeAssetGroup.id, patch);
+      updateAssetFlags(assetModalStoryId, assetGroups.map((g) => (g.id === activeAssetGroup.id ? { ...g, ...patch } : g)));
+    } catch (err: any) {
+      alert(`上传垫图失败: ${err.message}`);
+    } finally {
+      setAssetRefUploading(false);
+    }
+  };
+
+  const handleAssetRefDelete = async (filename: string) => {
+    if (assetModalStoryId === null || !activeAssetGroup) return;
+    try {
+      const r = activeAssetGroup.id === null
+        ? await deleteStoryRefImage(assetModalStoryId, filename)
+        : await deleteStoryAssetGroupRefImage(assetModalStoryId, activeAssetGroup.id, filename);
+      const patch = { ref_images: r.images, ref_count: r.images.length };
+      replaceAssetGroup(activeAssetGroup.id, patch);
+      updateAssetFlags(assetModalStoryId, assetGroups.map((g) => (g.id === activeAssetGroup.id ? { ...g, ...patch } : g)));
+    } catch (err: any) {
+      alert(`删除垫图失败: ${err.message}`);
     }
   };
 
@@ -104,26 +232,6 @@ export default function HomePage({ onSelectStory }: Props) {
       alert(`保存失败: ${err.message}`);
     } finally {
       setCharModalSaving(false);
-    }
-  };
-
-  const openRefModal = async (storyId: number) => {
-    const requestId = ++refModalRequestRef.current;
-    setRefModalStoryId(storyId);
-    setRefModalImages([]);
-    setRefModalLoading(true);
-    try {
-      const r = await getStoryRefImages(storyId);
-      if (refModalRequestRef.current !== requestId) return;
-      setRefModalImages(r.images);
-      setRefModalMax(r.max);
-      setStoryRefFlags((prev) => ({ ...prev, [storyId]: r.images.length > 0 }));
-    } catch {
-      if (refModalRequestRef.current !== requestId) return;
-      setRefModalImages([]);
-    } finally {
-      if (refModalRequestRef.current !== requestId) return;
-      setRefModalLoading(false);
     }
   };
 
@@ -496,7 +604,7 @@ export default function HomePage({ onSelectStory }: Props) {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              openCharModal(s.id);
+                              openAssetGroupModal(s.id);
                             }}
                             className={`p-1.5 transition-colors rounded ${
                               storyCharFlags[s.id]
@@ -510,7 +618,7 @@ export default function HomePage({ onSelectStory }: Props) {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              openRefModal(s.id);
+                              openAssetGroupModal(s.id);
                             }}
                             className={`p-1.5 transition-colors rounded ${
                               storyRefFlags[s.id]
@@ -570,6 +678,178 @@ export default function HomePage({ onSelectStory }: Props) {
           </div>
         )}
       </main>
+
+      {/* Asset groups modal */}
+      {assetModalStoryId !== null && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4"
+          onClick={() => setAssetModalStoryId(null)}
+        >
+          <div
+            className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-5xl shadow-2xl flex flex-col max-h-[88vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <Sparkles size={16} className="text-violet-400" />
+                全局设定组
+              </h3>
+              <button
+                onClick={() => setAssetModalStoryId(null)}
+                className="p-1 text-gray-500 hover:text-gray-300 transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {assetModalLoading ? (
+              <div className="flex items-center justify-center py-20 text-gray-500">
+                <Loader2 size={24} className="animate-spin" />
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] min-h-0 flex-1">
+                <div className="border-b md:border-b-0 md:border-r border-gray-800 p-3 overflow-y-auto">
+                  <button
+                    onClick={addAssetGroup}
+                    className="w-full flex items-center justify-center gap-1.5 px-3 py-2 mb-3 text-xs font-medium rounded-lg bg-violet-600 hover:bg-violet-500 text-white transition-colors"
+                  >
+                    <Plus size={13} />
+                    新增设定组
+                  </button>
+                  <div className="space-y-1">
+                    {assetGroups.map((group) => {
+                      const key = group.id === null ? 'default' : String(group.id);
+                      const active = key === assetSelectedKey;
+                      return (
+                        <button
+                          key={key}
+                          onClick={() => selectAssetGroup(group)}
+                          className={`w-full text-left px-3 py-2 rounded-lg border transition-colors ${
+                            active
+                              ? 'bg-violet-600/20 border-violet-500 text-white'
+                              : 'bg-gray-950/40 border-gray-800 text-gray-400 hover:text-gray-200 hover:border-gray-700'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs font-medium truncate">{group.name}</span>
+                            {group.is_default && <span className="text-[10px] text-blue-300 shrink-0">默认</span>}
+                          </div>
+                          <div className="mt-1 text-[10px] text-gray-500">
+                            {group.has_character_profiles ? '角色卡' : '无角色卡'} · {group.ref_count} 张垫图
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="min-h-0 flex flex-col">
+                  {activeAssetGroup ? (
+                    <>
+                      <div className="p-4 border-b border-gray-800 space-y-3">
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={assetDraftName}
+                            onChange={(e) => setAssetDraftName(e.target.value)}
+                            disabled={activeAssetGroup.is_default}
+                            className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 disabled:opacity-60"
+                          />
+                          {!activeAssetGroup.is_default && (
+                            <button
+                              onClick={removeAssetGroup}
+                              className="p-2 rounded-lg bg-red-950/40 border border-red-900 text-red-300 hover:bg-red-900/60 transition-colors"
+                              title="删除设定组"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          )}
+                        </div>
+                        <textarea
+                          value={assetDraftChars}
+                          onChange={(e) => setAssetDraftChars(e.target.value)}
+                          rows={8}
+                          className="w-full bg-gray-800 text-sm text-gray-200 rounded-lg p-3 resize-none outline-none border border-gray-700 focus:border-violet-500 leading-relaxed"
+                          placeholder={`角色名：塞蕾娜\n外貌：银灰色长发，冰蓝色眼睛...\n\n角色名：艾莉西亚\n外貌：金色长发，紫色眼睛...`}
+                        />
+                        <div className="flex justify-end">
+                          <button
+                            onClick={saveAssetGroup}
+                            disabled={assetModalSaving}
+                            className="px-5 py-2 bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-40"
+                          >
+                            {assetModalSaving ? '保存中…' : '保存角色卡'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex-1 overflow-y-auto p-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="text-xs text-gray-500">本组垫图 {activeAssetGroup.ref_count}/{refModalMax} 张</div>
+                          <button
+                            onClick={() => assetFileRef.current?.click()}
+                            disabled={assetRefUploading || activeAssetGroup.ref_count >= refModalMax}
+                            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-30 transition-colors"
+                          >
+                            {assetRefUploading ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
+                            添加垫图
+                          </button>
+                        </div>
+                        {activeAssetGroup.ref_images.length === 0 ? (
+                          <button
+                            onClick={() => assetFileRef.current?.click()}
+                            disabled={assetRefUploading}
+                            className="w-full flex flex-col items-center justify-center py-12 border-2 border-dashed border-gray-700 hover:border-amber-500/50 rounded-lg text-gray-500 hover:text-gray-400 transition-colors disabled:opacity-40"
+                          >
+                            <ImagePlus size={28} className="mb-2" />
+                            <span className="text-sm">点击上传本组第一张垫图</span>
+                          </button>
+                        ) : (
+                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                            {activeAssetGroup.ref_images.map((img) => (
+                              <div key={img.filename} className="relative aspect-square rounded-lg overflow-hidden border border-gray-700 bg-gray-950">
+                                <img
+                                  src={mangaThumbUrl(img.image_path, 480, img.filename)!}
+                                  alt={img.filename}
+                                  className="w-full h-full object-cover"
+                                  loading="lazy"
+                                  decoding="async"
+                                />
+                                <div className="absolute inset-0 bg-black/0 hover:bg-black/40 transition-colors flex items-end p-2 pointer-events-none">
+                                  <span className="text-[10px] text-white/80 bg-black/60 px-1.5 py-0.5 rounded">{img.size_kb} KB</span>
+                                </div>
+                                <button
+                                  onClick={() => handleAssetRefDelete(img.filename)}
+                                  className="absolute top-1.5 right-1.5 p-1 rounded-md bg-red-600 hover:bg-red-500 text-white shadow-lg transition-colors"
+                                  title="删除垫图"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <input
+                          ref={assetFileRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleAssetRefUpload(file);
+                            e.target.value = '';
+                          }}
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex items-center justify-center py-20 text-gray-500">暂无设定组</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Character card modal */}
       {charModalStoryId !== null && (

@@ -59,6 +59,8 @@ def _migrate():
                 conn.execute(text("ALTER TABLE chapters ADD COLUMN scenes_text TEXT"))
             if "character_profiles" not in cols:
                 conn.execute(text("ALTER TABLE chapters ADD COLUMN character_profiles TEXT"))
+            if "asset_group_id" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN asset_group_id INTEGER"))
             if "ref_image" not in cols:
                 conn.execute(text("ALTER TABLE chapters ADD COLUMN ref_image VARCHAR(500)"))
             if "color_mode" not in cols:
