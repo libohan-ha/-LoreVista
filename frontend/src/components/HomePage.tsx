@@ -22,13 +22,12 @@ import {
   exportStory,
   importStoryPackage,
   uploadStoryCover,
-  coverImageUrl,
+  mangaThumbUrl,
   getStoryCharacters,
   saveStoryCharacters,
   getStoryRefImages,
   addStoryRefImage,
   deleteStoryRefImage,
-  refImageUrl,
   type Story,
   type RefImage,
 } from '../api';
@@ -432,9 +431,11 @@ export default function HomePage({ onSelectStory }: Props) {
                 >
                   {s.cover_image ? (
                     <img
-                      src={coverImageUrl(s.cover_image)!}
+                      src={mangaThumbUrl(s.cover_image, 720)!}
                       alt={s.title}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      loading="lazy"
+                      decoding="async"
                     />
                   ) : (
                     <div className="flex flex-col items-center justify-center h-full text-gray-600 group-hover:text-gray-500 transition-colors">
@@ -684,9 +685,11 @@ export default function HomePage({ onSelectStory }: Props) {
                       className="relative group aspect-square rounded-lg overflow-hidden border border-gray-700 bg-gray-950"
                     >
                       <img
-                        src={`${refImageUrl(img.image_path)}?t=${Date.now()}`}
+                        src={mangaThumbUrl(img.image_path, 480, img.filename)!}
                         alt={img.filename}
                         className="w-full h-full object-cover"
+                        loading="lazy"
+                        decoding="async"
                       />
                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-end p-2 pointer-events-none">
                         <span className="text-[10px] text-white/80 bg-black/60 px-1.5 py-0.5 rounded">

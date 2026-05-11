@@ -212,9 +212,23 @@ export async function uploadStoryCover(storyId: number, base64: string): Promise
   return data.cover_image;
 }
 
+function mangaStaticPath(imagePath: string): string {
+  return imagePath.replace(/^manga_outputs\//, '');
+}
+
+function encodeStaticPath(imagePath: string): string {
+  return mangaStaticPath(imagePath).split('/').map(encodeURIComponent).join('/');
+}
+
+export function mangaThumbUrl(imagePath: string | null | undefined, width = 720, cacheBust?: string | number): string | null {
+  if (!imagePath) return null;
+  const url = `${BASE}/static/manga/_thumb/${encodeStaticPath(imagePath)}?w=${width}`;
+  return cacheBust ? `${url}&v=${encodeURIComponent(String(cacheBust))}` : url;
+}
+
 export function coverImageUrl(coverPath: string | null | undefined): string | null {
   if (!coverPath) return null;
-  return `${BASE}/static/manga/${coverPath.replace('manga_outputs/', '')}`;
+  return `${BASE}/static/manga/${mangaStaticPath(coverPath)}`;
 }
 
 // ─── Chapter ────────────────────────────────────────────────
@@ -423,7 +437,7 @@ export interface RefImagesPayload {
 }
 
 export function refImageUrl(imagePath: string): string {
-  return `${BASE}/static/manga/${imagePath.replace('manga_outputs/', '')}`;
+  return `${BASE}/static/manga/${mangaStaticPath(imagePath)}`;
 }
 
 // Story-level
@@ -633,6 +647,6 @@ export function generateMangaStream(
 export function mangaImageUrl(imagePath: string, cacheBust?: number): string {
   // imagePath is like "manga_outputs/chapter_1/panel_01_abc12345.png"
   // Served at /static/manga/chapter_1/panel_01_abc12345.png
-  const url = `${BASE}/static/manga/${imagePath.replace('manga_outputs/', '')}`;
+  const url = `${BASE}/static/manga/${mangaStaticPath(imagePath)}`;
   return cacheBust ? `${url}?t=${cacheBust}` : url;
 }
