@@ -12,6 +12,8 @@ import {
   getChapterRefImages,
   addChapterRefImage,
   deleteChapterRefImage,
+  getChapterAssetGroup,
+  setChapterAssetGroup,
   getColorMode,
   setColorMode,
   getImageCount,
@@ -24,6 +26,8 @@ import {
   type ColorMode,
   type RefSource,
   type RefImage,
+  type CharacterSource,
+  type AssetGroup,
 } from '../api';
 import { genStore } from '../genStore';
 
@@ -55,7 +59,10 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const [savingScenes, setSavingScenes] = useState(false);
   const [regenIdx, setRegenIdx] = useState<number>(-1);
   const [charText, setCharText] = useState('');
-  const [charSource, setCharSource] = useState<'chapter' | 'story' | 'none'>('none');
+  const [charSource, setCharSource] = useState<CharacterSource>('none');
+  const [assetGroups, setAssetGroups] = useState<AssetGroup[]>([]);
+  const [selectedAssetGroupId, setSelectedAssetGroupId] = useState<number | null>(null);
+  const [assetGroupSaving, setAssetGroupSaving] = useState(false);
   const [charEditing, setCharEditing] = useState(false);
   const [charDraft, setCharDraft] = useState('');
   const [charSaving, setCharSaving] = useState(false);
@@ -101,6 +108,9 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     setRegenIdx(-1);
     setCharText('');
     setCharSource('none');
+    setAssetGroups([]);
+    setSelectedAssetGroupId(null);
+    setAssetGroupSaving(false);
     setCharEditing(false);
     setCharExpanded(false);
     setRefImages([]);
@@ -111,6 +121,11 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     setShowColorMenu(false);
     // Load existing scenes and characters if available
     if (chapter) {
+      getChapterAssetGroup(chapter.id).then((r) => {
+        if (chapterLoadRequestRef.current !== requestId) return;
+        setAssetGroups(r.groups);
+        setSelectedAssetGroupId(r.selected_group_id ?? null);
+      }).catch(() => {});
       getChapterRefImages(chapter.id).then((r) => {
         if (chapterLoadRequestRef.current !== requestId) return;
         setRefImages(r.images);
@@ -166,6 +181,34 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
       img,
     }));
   const lightboxImg = lightboxIdx >= 0 ? displayImages[lightboxIdx] : null;
+
+  const refreshChapterAssetFallback = async (chapterId: number) => {
+    const [chars, refs] = await Promise.all([getCharacters(chapterId), getChapterRefImages(chapterId)]);
+    setCharText(chars.characters || '');
+    setCharSource(chars.source);
+    setRefImages(refs.images);
+    setRefSource(refs.source ?? (refs.images.length ? 'chapter' : 'none'));
+    setRefMax(refs.max);
+  };
+
+  const handleSelectAssetGroup = async (value: string) => {
+    if (!chapter) return;
+    const nextGroupId = value === '' ? null : Number(value);
+    const previous = selectedAssetGroupId;
+    setSelectedAssetGroupId(nextGroupId);
+    setAssetGroupSaving(true);
+    try {
+      const result = await setChapterAssetGroup(chapter.id, nextGroupId);
+      setAssetGroups(result.groups);
+      setSelectedAssetGroupId(result.selected_group_id ?? null);
+      await refreshChapterAssetFallback(chapter.id);
+    } catch (err: any) {
+      setSelectedAssetGroupId(previous);
+      setErrorMsg(`切换设定组失败: ${err.message}`);
+    } finally {
+      setAssetGroupSaving(false);
+    }
+  };
 
   // ── Scene generation ──
   const handleGenerateScenes = async () => {
@@ -426,6 +469,21 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
           第 {chapter?.chapter_number ?? '–'} 话 · 漫画
         </h2>
         <div className="flex items-center gap-1.5 md:gap-2 flex-wrap justify-end">
+          {assetGroups.length > 0 && (
+            <select
+              value={selectedAssetGroupId ?? ''}
+              onChange={(e) => handleSelectAssetGroup(e.target.value)}
+              disabled={!chapter || generating || assetGroupSaving}
+              className="max-w-[160px] px-2 py-1.5 text-xs font-medium rounded-md bg-gray-800 text-gray-300 border border-gray-700 outline-none focus:border-violet-500 transition-colors disabled:opacity-50"
+              title="选择本话继承的全局角色卡和垫图组"
+            >
+              {assetGroups.map((group) => (
+                <option key={group.id ?? 'default'} value={group.id ?? ''}>
+                  {group.is_default ? '默认组' : group.name}
+                </option>
+              ))}
+            </select>
+          )}
           {/* 垫图 (Reference Images, 多图) */}
           <div className="flex items-center gap-1">
             <input
@@ -465,7 +523,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                 } disabled:opacity-40`}
               title={
                 refImages.length > 0
-                  ? refSource === 'story'
+                  ? refSource === 'story' || refSource === 'asset_group'
                     ? `全局垫图 ${refImages.length} 张· 点击查看/管理`
                     : `已设置 ${refImages.length} 张垫图· 点击查看/管理`
                   : '点击上传垫图参考'
@@ -473,7 +531,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             >
               <ImagePlus size={13} />
               {refImages.length > 0
-                ? refSource === 'story'
+                ? refSource === 'story' || refSource === 'asset_group'
                   ? `全局垫图 ${refImages.length}`
                   : `已垫图 ${refImages.length}`
                 : '垫图'}
@@ -690,6 +748,9 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                 🎭 角色外貌卡
                 {charText && charSource === 'story' && (
                   <span className="text-[10px] font-normal normal-case px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-400 border border-blue-800/50">继承自首页</span>
+                )}
+                {charText && charSource === 'asset_group' && (
+                  <span className="text-[10px] font-normal normal-case px-1.5 py-0.5 rounded bg-violet-900/50 text-violet-300 border border-violet-800/50">来自设定组</span>
                 )}
                 {charText && charSource === 'chapter' && (
                   <span className="text-[10px] font-normal normal-case px-1.5 py-0.5 rounded bg-emerald-900/50 text-emerald-400 border border-emerald-800/50">本话自定义</span>
@@ -1026,7 +1087,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                 <h3 className="text-sm font-semibold text-gray-200">垫图管理</h3>
                 <span className="text-xs text-gray-500">
                   {refImages.length}/{refMax} 张
-                  {refSource === 'story' && refImages.length > 0 && (
+                  {(refSource === 'story' || refSource === 'asset_group') && refImages.length > 0 && (
                     <span className="ml-2 text-blue-400">· 继承自全局</span>
                   )}
                 </span>
@@ -1041,7 +1102,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             <div className="flex-1 overflow-y-auto p-5">
               <p className="text-xs text-gray-500 mb-4 leading-relaxed">
                 上传角色参考图，AI 生成漫画时会保持人物外貌一致性。
-                {refSource === 'story' && refImages.length > 0 && (
+                {(refSource === 'story' || refSource === 'asset_group') && refImages.length > 0 && (
                   <> 当前显示首页设置的全局垫图；上传新图将创建本话专属垫图覆盖全局。</>
                 )}
               </p>
@@ -1102,7 +1163,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
               <span className="text-xs text-gray-500">
                 {refSource === 'chapter'
                   ? '本话自定义垫图（覆盖全局）'
-                  : refSource === 'story'
+                  : refSource === 'story' || refSource === 'asset_group'
                     ? '当前显示全局垫图'
                     : '尚未上传垫图'}
               </span>
@@ -1119,7 +1180,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                 }
               >
                 {refUploading ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
-                {refSource === 'story' && refImages.length > 0 ? '上传本话垫图（覆盖全局）' : '添加垫图'}
+                {(refSource === 'story' || refSource === 'asset_group') && refImages.length > 0 ? '上传本话垫图（覆盖全局）' : '添加垫图'}
               </button>
             </div>
           </div>

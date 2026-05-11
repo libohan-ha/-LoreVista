@@ -38,20 +38,32 @@ class StoryOut(BaseModel):
             ref_image = getattr(data, 'ref_image', '') or ''
             d = dict(data.__dict__) if hasattr(data, '__dict__') else dict(data)
             d['has_character_profiles'] = bool(cp.strip())
+            groups = list(getattr(data, 'asset_groups', []) or [])
+            if not d['has_character_profiles']:
+                d['has_character_profiles'] = any(bool((getattr(group, 'character_profiles', '') or '').strip()) for group in groups)
             # Check DB ref_image field OR multi-ref dir on disk
             has_db_ref = bool(ref_image and (Path(__file__).resolve().parent / ref_image).exists())
             story_id = getattr(data, 'id', None)
             has_multi_ref = False
             has_legacy_ref = False
+            has_group_ref = False
             if story_id:
                 story_dir = Path(__file__).resolve().parent / "manga_outputs" / f"story_{story_id}"
                 ref_dir = story_dir / "ref_images"
                 has_multi_ref = ref_dir.exists() and any(
-                    p.is_file() and p.suffix.lower() == ".png"
+                    p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
                     for p in ref_dir.iterdir()
                 )
                 has_legacy_ref = (story_dir / "ref_image.png").exists()
-            d['has_ref_image'] = has_db_ref or has_multi_ref or has_legacy_ref
+            for group in groups:
+                group_id = getattr(group, 'id', None)
+                if not group_id:
+                    continue
+                ref_dir = Path(__file__).resolve().parent / "manga_outputs" / "asset_groups" / f"group_{group_id}" / "ref_images"
+                if ref_dir.exists() and any(p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for p in ref_dir.iterdir()):
+                    has_group_ref = True
+                    break
+            d['has_ref_image'] = has_db_ref or has_multi_ref or has_legacy_ref or has_group_ref
             return d
         return data
 
@@ -63,6 +75,7 @@ class ChapterOut(BaseModel):
     chapter_number: int
     novel_content: Optional[str] = None
     content_source: Optional[str] = None
+    asset_group_id: Optional[int] = None
     created_at: datetime.datetime
     messages: list[ChatMessageOut] = []
     images: list[MangaImageOut] = []

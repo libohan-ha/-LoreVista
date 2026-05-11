@@ -18,6 +18,24 @@ class Story(Base):
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
     chapters: Mapped[list["Chapter"]] = relationship("Chapter", back_populates="story", order_by="Chapter.chapter_number", cascade="all, delete-orphan")
+    asset_groups: Mapped[list["StoryAssetGroup"]] = relationship("StoryAssetGroup", back_populates="story", order_by="StoryAssetGroup.id", cascade="all, delete-orphan")
+
+    @property
+    def has_character_profiles(self) -> bool:
+        return bool((self.character_profiles or "").strip())
+
+
+class StoryAssetGroup(Base):
+    __tablename__ = "story_asset_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    story_id: Mapped[int] = mapped_column(Integer, ForeignKey("stories.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, default="设定组")
+    character_profiles: Mapped[str | None] = mapped_column(Text, nullable=True, default="")
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    story: Mapped["Story"] = relationship("Story", back_populates="asset_groups")
+    chapters: Mapped[list["Chapter"]] = relationship("Chapter", back_populates="asset_group")
 
     @property
     def has_character_profiles(self) -> bool:
@@ -35,12 +53,14 @@ class Chapter(Base):
     content_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
     scenes_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     character_profiles: Mapped[str | None] = mapped_column(Text, nullable=True)
+    asset_group_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("story_asset_groups.id"), nullable=True)
     ref_image: Mapped[str | None] = mapped_column(String(500), nullable=True)
     color_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     image_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
     story: Mapped["Story"] = relationship("Story", back_populates="chapters")
+    asset_group: Mapped["StoryAssetGroup | None"] = relationship("StoryAssetGroup", back_populates="chapters")
     messages: Mapped[list["ChatMessage"]] = relationship("ChatMessage", back_populates="chapter", order_by="ChatMessage.created_at", cascade="all, delete-orphan")
     images: Mapped[list["MangaImage"]] = relationship("MangaImage", back_populates="chapter", order_by="MangaImage.image_number", cascade="all, delete-orphan")
 
