@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from database import get_db, init_db
+from database import SessionLocal, get_db, init_db
 from models import Chapter, ChatMessage, MangaImage, Story
 from schemas import (
     ChapterOut,
@@ -39,6 +39,7 @@ load_dotenv()
 
 logger = logging.getLogger("main")
 ACTIVE_MANGA_GENERATIONS: set[int] = set()
+MANGA_GENERATION_JOBS: dict[int, "MangaGenerationJob"] = {}
 
 app = FastAPI(title="Novel & Manga Generator")
 
@@ -1326,6 +1327,114 @@ async def update_scenes_endpoint(chapter_id: int, body: dict, db: Session = Depe
 
 # ─── SSE for manga image generation ─────────────────────
 
+class MangaGenerationJob:
+    def __init__(self, chapter_id: int, total: int):
+        self.chapter_id = chapter_id
+        self.total = total
+        self.active = True
+        self.events: list[dict[str, str]] = []
+        self.subscribers: set[asyncio.Queue] = set()
+        self.task: asyncio.Task | None = None
+
+    async def publish(self, event: str, data: dict):
+        payload = {"event": event, "data": json.dumps(data, ensure_ascii=False)}
+        self.events.append(payload)
+        if len(self.events) > 300:
+            self.events = self.events[-300:]
+        for queue in list(self.subscribers):
+            with contextlib.suppress(asyncio.QueueFull):
+                queue.put_nowait(payload)
+
+
+async def _run_manga_generation_job(job: MangaGenerationJob, chapter_id: int, image_count: int, scenes: list[str], api_key: str | None):
+    db = SessionLocal()
+    try:
+        await job.publish("scenes", {"scenes": scenes})
+        chapter = db.get(Chapter, chapter_id)
+        if not chapter:
+            await job.publish("error", {"error": "Chapter not found"})
+            return
+
+        existing_images = {
+            img.image_number: img
+            for img in db.query(MangaImage).filter(MangaImage.chapter_id == chapter_id).all()
+        }
+
+        for i, scene_prompt in enumerate(scenes, start=1):
+            if i in existing_images:
+                img = existing_images[i]
+                await job.publish("image", {
+                    "id": img.id,
+                    "image_number": i,
+                    "image_path": img.image_path,
+                    "prompt": img.prompt or scene_prompt,
+                })
+                continue
+
+            await job.publish("progress", {"current": i, "total": image_count, "prompt": scene_prompt})
+
+            try:
+                ref_imgs = _effective_ref_image_paths(chapter_id, db)
+                image_path = await generate_manga_image(
+                    scene_prompt,
+                    chapter_id,
+                    i,
+                    all_scenes=scenes,
+                    character_profiles=_load_characters(chapter_id, db),
+                    ref_image_paths=[str(p) for p in ref_imgs] if ref_imgs else None,
+                    color_mode=_load_color_mode(chapter_id, db),
+                    api_key=api_key,
+                )
+            except Exception as img_err:
+                await job.publish("error", {"error": f"第 {i} 张生成失败: {img_err}"})
+                return
+
+            manga = MangaImage(
+                chapter_id=chapter_id,
+                image_number=i,
+                image_path=image_path,
+                prompt=scene_prompt,
+            )
+            db.add(manga)
+            db.commit()
+            db.refresh(manga)
+            await job.publish("image", {
+                "id": manga.id,
+                "image_number": i,
+                "image_path": image_path,
+                "prompt": scene_prompt,
+            })
+
+        await job.publish("done", {"message": "漫画生成完成！"})
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.exception("Manga generation job failed for chapter %s", chapter_id)
+        await job.publish("error", {"error": str(exc)})
+    finally:
+        db.close()
+        job.active = False
+        ACTIVE_MANGA_GENERATIONS.discard(chapter_id)
+
+
+async def _stream_manga_generation_job(job: MangaGenerationJob):
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+    for payload in job.events:
+        yield payload
+    if not job.active:
+        return
+
+    job.subscribers.add(queue)
+    try:
+        while True:
+            payload = await queue.get()
+            yield payload
+            if payload.get("event") in {"done", "error"}:
+                return
+    finally:
+        job.subscribers.discard(queue)
+
+
 @app.post("/api/chapters/{chapter_id}/generate-manga-stream")
 async def generate_manga_stream(chapter_id: int, request: Request, db: Session = Depends(get_db)):
     chapter = db.get(Chapter, chapter_id)
@@ -1338,82 +1447,23 @@ async def generate_manga_stream(chapter_id: int, request: Request, db: Session =
         raise HTTPException(400, "No scene prompts found. Generate scenes first.")
     if len(scenes) != image_count:
         raise HTTPException(400, f"Expected {image_count} scenes, found {len(scenes)}")
-    if chapter_id in ACTIVE_MANGA_GENERATIONS:
-        raise HTTPException(409, "Manga generation is already running for this chapter")
-    ACTIVE_MANGA_GENERATIONS.add(chapter_id)
 
-    # Check which images already exist
-    existing_images = {img.image_number: img for img in chapter.images}
+    job = MANGA_GENERATION_JOBS.get(chapter_id)
+    if not job or not job.active:
+        ACTIVE_MANGA_GENERATIONS.add(chapter_id)
+        job = MangaGenerationJob(chapter_id, image_count)
+        MANGA_GENERATION_JOBS[chapter_id] = job
+        job.task = asyncio.create_task(
+            _run_manga_generation_job(
+                job,
+                chapter_id,
+                image_count,
+                scenes,
+                _user_image_api_key(request),
+            )
+        )
 
-    async def event_generator():
-        try:
-            yield {"event": "scenes", "data": json.dumps({"scenes": scenes}, ensure_ascii=False)}
-
-            for i, scene_prompt in enumerate(scenes, start=1):
-                # Skip already generated images
-                if i in existing_images:
-                    img = existing_images[i]
-                    yield {
-                        "event": "image",
-                        "data": json.dumps({
-                            "id": img.id,
-                            "image_number": i,
-                            "image_path": img.image_path,
-                            "prompt": img.prompt or scene_prompt,
-                        }, ensure_ascii=False),
-                    }
-                    continue
-
-                yield {
-                    "event": "progress",
-                    "data": json.dumps({"current": i, "total": image_count, "prompt": scene_prompt}, ensure_ascii=False),
-                }
-
-                try:
-                    ref_imgs = _effective_ref_image_paths(chapter_id, db)
-                    image_path = await generate_manga_image(
-                        scene_prompt,
-                        chapter_id,
-                        i,
-                        all_scenes=scenes,
-                        character_profiles=_load_characters(chapter_id, db),
-                        ref_image_paths=[str(p) for p in ref_imgs] if ref_imgs else None,
-                        color_mode=_load_color_mode(chapter_id, db),
-                        api_key=_user_image_api_key(request),
-                    )
-                except Exception as img_err:
-                    yield {
-                        "event": "error",
-                        "data": json.dumps({"error": f"第{i}张生成失败: {img_err}"}, ensure_ascii=False),
-                    }
-                    return
-
-                manga = MangaImage(
-                    chapter_id=chapter_id,
-                    image_number=i,
-                    image_path=image_path,
-                    prompt=scene_prompt,
-                )
-                db.add(manga)
-                db.commit()
-                db.refresh(manga)
-                yield {
-                    "event": "image",
-                    "data": json.dumps({
-                        "id": manga.id,
-                        "image_number": i,
-                        "image_path": image_path,
-                        "prompt": scene_prompt,
-                    }, ensure_ascii=False),
-                }
-
-            yield {"event": "done", "data": json.dumps({"message": "漫画生成完成！"}, ensure_ascii=False)}
-        except Exception as e:
-            yield {"event": "error", "data": json.dumps({"error": str(e)}, ensure_ascii=False)}
-        finally:
-            ACTIVE_MANGA_GENERATIONS.discard(chapter_id)
-
-    return EventSourceResponse(event_generator(), ping=10)
+    return EventSourceResponse(_stream_manga_generation_job(job), ping=10)
 
 
 # ─── Regenerate single image ─────────────────────────────

@@ -544,13 +544,35 @@ export function generateMangaStream(
   onEvent: (event: MangaProgress) => void,
 ): AbortController {
   const controller = new AbortController();
+  let reconnectAttempts = 0;
+  let reconnectTimer: number | undefined;
+  const maxReconnectAttempts = 120;
 
-  fetch(`${BASE}/api/chapters/${chapterId}/generate-manga-stream`, {
-    method: 'POST',
-    headers: apiHeaders(),
-    signal: controller.signal,
-  })
-    .then(async (res) => {
+  const scheduleReconnect = (reason: string) => {
+    if (controller.signal.aborted) return;
+    reconnectAttempts += 1;
+    if (reconnectAttempts > maxReconnectAttempts) {
+      onEvent({ type: 'error', data: { error: reason || '生成连接已断开，请稍后重试' } });
+      return;
+    }
+    onEvent({
+      type: 'status',
+      data: { message: `连接中断，正在重连...（${reconnectAttempts}/${maxReconnectAttempts}）` },
+    });
+    reconnectTimer = window.setTimeout(connect, Math.min(5000, 1000 + reconnectAttempts * 500));
+  };
+
+  controller.signal.addEventListener('abort', () => {
+    if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+  });
+
+  const connect = () => {
+    fetch(`${BASE}/api/chapters/${chapterId}/generate-manga-stream`, {
+      method: 'POST',
+      headers: apiHeaders(),
+      signal: controller.signal,
+    })
+      .then(async (res) => {
       if (!res.ok) {
         onEvent({ type: 'error', data: { error: await res.text() } });
         return;
@@ -593,14 +615,17 @@ export function generateMangaStream(
       }
       if (buffer.trim()) handleLine(buffer);
       if (!receivedTerminalEvent && !controller.signal.aborted) {
-        onEvent({ type: 'error', data: { error: '生成连接已断开，请稍后重试' } });
+        scheduleReconnect('生成连接已断开，请稍后重试');
       }
     })
     .catch((err) => {
       if (err.name !== 'AbortError') {
-        onEvent({ type: 'error', data: { error: err.message } });
+        scheduleReconnect(err.message || '生成连接已断开，请稍后重试');
       }
     });
+  };
+
+  connect();
 
   return controller;
 }
