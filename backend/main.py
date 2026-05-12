@@ -333,6 +333,9 @@ def delete_story(story_id: int, db: Session = Depends(get_db)):
     story = db.get(Story, story_id)
     if not story:
         raise HTTPException(404, "Story not found")
+    story_asset_dir = _story_ref_dir_for_story(story, db).parent
+    group_asset_dirs = [_asset_group_ref_dir_for_group(group, db).parent for group in story.asset_groups]
+    legacy_group_dirs = [_asset_group_ref_dir(group.id).parent for group in story.asset_groups]
     # Delete all chapters and their data
     for chapter in story.chapters:
         chapter_dir = Path(__file__).resolve().parent / "manga_outputs" / f"chapter_{chapter.id}"
@@ -350,6 +353,11 @@ def delete_story(story_id: int, db: Session = Depends(get_db)):
             logger.warning("Story cover remained after story deletion: %s", cover_path)
     story_dir = Path(__file__).resolve().parent / "manga_outputs" / f"story_{story_id}"
     _rmtree_best_effort(story_dir, "story asset directory")
+    _rmtree_best_effort(story_asset_dir, "story keyed asset directory")
+    for group_dir in group_asset_dirs:
+        _rmtree_best_effort(group_dir, "asset group keyed directory")
+    for group_dir in legacy_group_dirs:
+        _rmtree_best_effort(group_dir, "legacy asset group directory")
     db.delete(story)
     db.commit()
     return {"ok": True}
@@ -700,6 +708,52 @@ def _asset_group_ref_dir(group_id: int) -> Path:
     return Path(__file__).resolve().parent / "manga_outputs" / "asset_groups" / f"group_{group_id}" / "ref_images"
 
 
+def _ensure_asset_key(owner: Story | StoryAssetGroup, db: Session | None = None) -> str:
+    key = (getattr(owner, "asset_key", None) or "").strip()
+    if not key:
+        key = uuid.uuid4().hex
+        owner.asset_key = key
+        if db:
+            db.add(owner)
+            db.commit()
+            db.refresh(owner)
+    return key
+
+
+def _move_dir_contents(src: Path, dst: Path, label: str) -> None:
+    if not src.exists() or src.resolve() == dst.resolve():
+        return
+    try:
+        dst.mkdir(parents=True, exist_ok=True)
+        for item in src.iterdir():
+            target = dst / item.name
+            if target.exists():
+                target = dst / f"{item.stem}_{uuid.uuid4().hex[:8]}{item.suffix}"
+            item.rename(target)
+        with contextlib.suppress(OSError):
+            src.rmdir()
+    except OSError as exc:
+        logger.warning("Failed to migrate %s %s -> %s: %s", label, src, dst, exc)
+
+
+def _story_ref_dir_for_story(story: Story, db: Session | None = None) -> Path:
+    key = _ensure_asset_key(story, db)
+    return Path(__file__).resolve().parent / "manga_outputs" / "story_assets" / key / "ref_images"
+
+
+def _asset_group_ref_dir_for_group(group: StoryAssetGroup, db: Session | None = None) -> Path:
+    key = _ensure_asset_key(group, db)
+    return Path(__file__).resolve().parent / "manga_outputs" / "asset_group_assets" / key / "ref_images"
+
+
+def _story_ref_static_kind(story: Story, db: Session | None = None) -> tuple[str, str]:
+    return "story_asset", _ensure_asset_key(story, db)
+
+
+def _asset_group_ref_static_kind(group: StoryAssetGroup, db: Session | None = None) -> tuple[str, str]:
+    return "asset_group_asset", _ensure_asset_key(group, db)
+
+
 def _legacy_story_ref_image(story_id: int) -> Path:
     """Old single-file location, kept for backward compat / lazy migration."""
     return Path(__file__).resolve().parent / "manga_outputs" / f"story_{story_id}" / "ref_image.png"
@@ -744,16 +798,20 @@ def _list_ref_files(ref_dir: Path) -> list[Path]:
     return sorted([p for p in ref_dir.iterdir() if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}])
 
 
-def _ref_static_path(ref_dir: Path, filename: str, kind: str, owner_id: int) -> str:
+def _ref_static_path(ref_dir: Path, filename: str, kind: str, owner_id: int | str) -> str:
     """Build the static URL-relative path for a ref image."""
     if kind == "story":
         return f"manga_outputs/story_{owner_id}/ref_images/{filename}"
+    if kind == "story_asset":
+        return f"manga_outputs/story_assets/{owner_id}/ref_images/{filename}"
     if kind == "asset_group":
         return f"manga_outputs/asset_groups/group_{owner_id}/ref_images/{filename}"
+    if kind == "asset_group_asset":
+        return f"manga_outputs/asset_group_assets/{owner_id}/ref_images/{filename}"
     return f"manga_outputs/chapter_{owner_id}/ref_images/{filename}"
 
 
-def _serialize_refs(ref_dir: Path, kind: str, owner_id: int) -> list[dict]:
+def _serialize_refs(ref_dir: Path, kind: str, owner_id: int | str) -> list[dict]:
     out = []
     for p in _list_ref_files(ref_dir):
         out.append({
@@ -774,7 +832,7 @@ def _db_ref_entry(db_ref: Path | None, image_path: str | None) -> dict | None:
     }
 
 
-def _serialize_refs_with_db_ref(ref_dir: Path, kind: str, owner_id: int, db_ref: Path | None, image_path: str | None) -> list[dict]:
+def _serialize_refs_with_db_ref(ref_dir: Path, kind: str, owner_id: int | str, db_ref: Path | None, image_path: str | None) -> list[dict]:
     images = _serialize_refs(ref_dir, kind, owner_id)
     entry = _db_ref_entry(db_ref, image_path)
     if entry:
@@ -796,11 +854,10 @@ def _effective_ref_image_paths(chapter_id: int, db: Session) -> list[Path]:
             return [cp]
         group = _selected_asset_group(chapter)
         if group:
-            group_refs = _list_ref_files(_asset_group_ref_dir(group.id))
+            group_refs = _list_ref_files(_asset_group_ref_dir_for_group(group, db))
             if group_refs:
                 return group_refs
-        story_dir = _story_ref_dir(chapter.story_id)
-        _migrate_legacy_ref(_legacy_story_ref_image(chapter.story_id), story_dir)
+        story_dir = _story_ref_dir_for_story(chapter.story, db) if chapter.story else _story_ref_dir(chapter.story_id)
         story_refs = _list_ref_files(story_dir)
         if story_refs:
             return story_refs
@@ -822,10 +879,10 @@ def _save_uploaded_ref(ref_dir: Path, img_bytes: bytes, label: str, existing_cou
 
 
 def _default_asset_group_payload(story: Story) -> dict:
-    ref_dir = _story_ref_dir(story.id)
-    _migrate_legacy_ref(_legacy_story_ref_image(story.id), ref_dir)
+    ref_dir = _story_ref_dir_for_story(story)
     db_ref = _story_ref_image_db_path(story)
-    refs = _serialize_refs_with_db_ref(ref_dir, "story", story.id, db_ref, story.ref_image)
+    kind, owner = _story_ref_static_kind(story)
+    refs = _serialize_refs_with_db_ref(ref_dir, kind, owner, db_ref, story.ref_image)
     characters = (story.character_profiles or "").strip()
     return {
         "id": None,
@@ -839,7 +896,8 @@ def _default_asset_group_payload(story: Story) -> dict:
 
 
 def _asset_group_payload(group: StoryAssetGroup) -> dict:
-    refs = _serialize_refs(_asset_group_ref_dir(group.id), "asset_group", group.id)
+    kind, owner = _asset_group_ref_static_kind(group)
+    refs = _serialize_refs(_asset_group_ref_dir_for_group(group), kind, owner)
     characters = (group.character_profiles or "").strip()
     return {
         "id": group.id,
@@ -912,37 +970,42 @@ async def delete_story_asset_group(story_id: int, group_id: int, db: Session = D
     if not story:
         raise HTTPException(404, "Story not found")
     group = _require_asset_group(story_id, group_id, db)
+    group_ref_parent = _asset_group_ref_dir_for_group(group, db).parent
     db.query(Chapter).filter(Chapter.asset_group_id == group.id).update({Chapter.asset_group_id: None})
     db.delete(group)
     db.commit()
-    _rmtree_best_effort(_asset_group_ref_dir(group_id).parent, "asset group ref images")
+    _rmtree_best_effort(group_ref_parent, "asset group ref images")
+    _rmtree_best_effort(_asset_group_ref_dir(group_id).parent, "legacy asset group ref images")
     return {"groups": _story_asset_groups_payload(story)}
 
 
 @app.get("/api/stories/{story_id}/asset-groups/{group_id}/ref-images")
 async def list_story_asset_group_refs(story_id: int, group_id: int, db: Session = Depends(get_db)):
-    _require_asset_group(story_id, group_id, db)
-    return {"images": _serialize_refs(_asset_group_ref_dir(group_id), "asset_group", group_id), "max": MAX_REF_IMAGES_PER_LEVEL}
+    group = _require_asset_group(story_id, group_id, db)
+    kind, owner = _asset_group_ref_static_kind(group, db)
+    return {"images": _serialize_refs(_asset_group_ref_dir_for_group(group, db), kind, owner), "max": MAX_REF_IMAGES_PER_LEVEL}
 
 
 @app.post("/api/stories/{story_id}/asset-groups/{group_id}/ref-images")
 async def add_story_asset_group_ref(story_id: int, group_id: int, request: Request, db: Session = Depends(get_db)):
-    _require_asset_group(story_id, group_id, db)
+    group = _require_asset_group(story_id, group_id, db)
     body = await request.json()
     img_bytes = _decode_png_upload(body.get("image", ""))
-    ref_dir = _asset_group_ref_dir(group_id)
+    ref_dir = _asset_group_ref_dir_for_group(group, db)
     _save_uploaded_ref(ref_dir, img_bytes, "asset group ref image")
-    return {"images": _serialize_refs(ref_dir, "asset_group", group_id), "max": MAX_REF_IMAGES_PER_LEVEL}
+    kind, owner = _asset_group_ref_static_kind(group, db)
+    return {"images": _serialize_refs(ref_dir, kind, owner), "max": MAX_REF_IMAGES_PER_LEVEL}
 
 
 @app.delete("/api/stories/{story_id}/asset-groups/{group_id}/ref-images/{filename}")
 async def delete_story_asset_group_ref(story_id: int, group_id: int, filename: str, db: Session = Depends(get_db)):
-    _require_asset_group(story_id, group_id, db)
+    group = _require_asset_group(story_id, group_id, db)
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(400, "invalid filename")
-    ref_dir = _asset_group_ref_dir(group_id)
+    ref_dir = _asset_group_ref_dir_for_group(group, db)
     _unlink_file(ref_dir / filename, "asset group ref image")
-    return {"images": _serialize_refs(ref_dir, "asset_group", group_id), "max": MAX_REF_IMAGES_PER_LEVEL}
+    kind, owner = _asset_group_ref_static_kind(group, db)
+    return {"images": _serialize_refs(ref_dir, kind, owner), "max": MAX_REF_IMAGES_PER_LEVEL}
 
 
 @app.get("/api/chapters/{chapter_id}/asset-group")
@@ -984,10 +1047,10 @@ async def list_story_ref_images(story_id: int, db: Session = Depends(get_db)):
     story = db.get(Story, story_id)
     if not story:
         raise HTTPException(404, "Story not found")
-    ref_dir = _story_ref_dir(story_id)
-    _migrate_legacy_ref(_legacy_story_ref_image(story_id), ref_dir)
+    ref_dir = _story_ref_dir_for_story(story, db)
     db_ref = _story_ref_image_db_path(story)
-    images = _serialize_refs_with_db_ref(ref_dir, "story", story_id, db_ref, story.ref_image)
+    kind, owner = _story_ref_static_kind(story, db)
+    images = _serialize_refs_with_db_ref(ref_dir, kind, owner, db_ref, story.ref_image)
     return {"images": images, "max": MAX_REF_IMAGES_PER_LEVEL}
 
 
@@ -998,12 +1061,12 @@ async def add_story_ref_image(story_id: int, request: Request, db: Session = Dep
         raise HTTPException(404, "Story not found")
     body = await request.json()
     img_bytes = _decode_png_upload(body.get("image", ""))
-    ref_dir = _story_ref_dir(story_id)
-    _migrate_legacy_ref(_legacy_story_ref_image(story_id), ref_dir)
+    ref_dir = _story_ref_dir_for_story(story, db)
     db_ref = _story_ref_image_db_path(story)
     existing_count = len(_list_ref_files(ref_dir)) + (1 if db_ref else 0)
     _save_uploaded_ref(ref_dir, img_bytes, "story ref image", existing_count=existing_count)
-    return {"images": _serialize_refs_with_db_ref(ref_dir, "story", story_id, db_ref, story.ref_image), "max": MAX_REF_IMAGES_PER_LEVEL}
+    kind, owner = _story_ref_static_kind(story, db)
+    return {"images": _serialize_refs_with_db_ref(ref_dir, kind, owner, db_ref, story.ref_image), "max": MAX_REF_IMAGES_PER_LEVEL}
 
 
 @app.delete("/api/stories/{story_id}/ref-images/{filename}")
@@ -1019,12 +1082,15 @@ async def delete_story_ref_image(story_id: int, filename: str, db: Session = Dep
             _unlink_file(p, "story ref image")
         story.ref_image = None
         db.commit()
-        ref_dir = _story_ref_dir(story_id)
-        return {"images": _serialize_refs(ref_dir, "story", story_id), "max": MAX_REF_IMAGES_PER_LEVEL}
-    p = _story_ref_dir(story_id) / filename
+        ref_dir = _story_ref_dir_for_story(story, db)
+        kind, owner = _story_ref_static_kind(story, db)
+        return {"images": _serialize_refs(ref_dir, kind, owner), "max": MAX_REF_IMAGES_PER_LEVEL}
+    p = _story_ref_dir_for_story(story, db) / filename
     _unlink_file(p, "story ref image")
+    ref_dir = _story_ref_dir_for_story(story, db)
+    kind, owner = _story_ref_static_kind(story, db)
     return {
-        "images": _serialize_refs_with_db_ref(_story_ref_dir(story_id), "story", story_id, _story_ref_image_db_path(story), story.ref_image),
+        "images": _serialize_refs_with_db_ref(ref_dir, kind, owner, _story_ref_image_db_path(story), story.ref_image),
         "max": MAX_REF_IMAGES_PER_LEVEL,
     }
 
@@ -1042,7 +1108,8 @@ async def list_chapter_ref_images(chapter_id: int, db: Session = Depends(get_db)
         return {"images": chapter_refs, "source": "chapter", "max": MAX_REF_IMAGES_PER_LEVEL}
     group = _selected_asset_group(chapter)
     if group:
-        group_refs = _serialize_refs(_asset_group_ref_dir(group.id), "asset_group", group.id)
+        group_kind, group_owner = _asset_group_ref_static_kind(group, db)
+        group_refs = _serialize_refs(_asset_group_ref_dir_for_group(group, db), group_kind, group_owner)
         if group_refs:
             return {
                 "images": group_refs,
@@ -1051,13 +1118,13 @@ async def list_chapter_ref_images(chapter_id: int, db: Session = Depends(get_db)
                 "group_name": group.name,
                 "max": MAX_REF_IMAGES_PER_LEVEL,
             }
-    story_dir = _story_ref_dir(chapter.story_id)
-    _migrate_legacy_ref(_legacy_story_ref_image(chapter.story_id), story_dir)
+    story_dir = _story_ref_dir_for_story(chapter.story, db) if chapter.story else _story_ref_dir(chapter.story_id)
     sp = _story_ref_image_db_path(chapter.story) if chapter.story else None
+    story_kind, story_owner = _story_ref_static_kind(chapter.story, db) if chapter.story else ("story", chapter.story_id)
     story_refs = _serialize_refs_with_db_ref(
         story_dir,
-        "story",
-        chapter.story_id,
+        story_kind,
+        story_owner,
         sp,
         chapter.story.ref_image if chapter.story else None,
     )
@@ -1134,8 +1201,7 @@ def _zip_add_path(zf: zipfile.ZipFile, added: set[str], zip_name: str, path: Pat
 
 
 def _story_ref_paths_for_export(story: Story) -> list[Path]:
-    ref_dir = _story_ref_dir(story.id)
-    _migrate_legacy_ref(_legacy_story_ref_image(story.id), ref_dir)
+    ref_dir = _story_ref_dir_for_story(story)
     paths = _list_ref_files(ref_dir)
     db_ref = _story_ref_image_db_path(story)
     if db_ref and db_ref not in paths:
@@ -1154,7 +1220,7 @@ def _chapter_ref_paths_for_export(chapter: Chapter) -> list[Path]:
 
 
 def _asset_group_ref_paths_for_export(group: StoryAssetGroup) -> list[Path]:
-    return _list_ref_files(_asset_group_ref_dir(group.id))
+    return _list_ref_files(_asset_group_ref_dir_for_group(group))
 
 
 @app.get("/api/stories/{story_id}/export")
@@ -1356,7 +1422,7 @@ async def import_story(request: Request, db: Session = Depends(get_db)):
                     continue
                 suffix = Path(member).suffix.lower() or ".png"
                 filename = f"ref_{uuid.uuid4().hex[:8]}{suffix}"
-                _copy_zip_asset(zf, member, _story_ref_dir(story.id) / filename, "story ref image", written)
+                _copy_zip_asset(zf, member, _story_ref_dir_for_story(story, db) / filename, "story ref image", written)
 
             group_key_to_id: dict[str, int] = {}
             for group_idx, group_data in enumerate(story_data.get("asset_groups", []) or [], start=1):
@@ -1377,7 +1443,7 @@ async def import_story(request: Request, db: Session = Depends(get_db)):
                         continue
                     suffix = Path(member).suffix.lower() or ".png"
                     filename = f"ref_{uuid.uuid4().hex[:8]}{suffix}"
-                    _copy_zip_asset(zf, member, _asset_group_ref_dir(group.id) / filename, "asset group ref image", written)
+                    _copy_zip_asset(zf, member, _asset_group_ref_dir_for_group(group, db) / filename, "asset group ref image", written)
 
             for chapter_data in sorted(chapters_data, key=lambda ch: int(ch.get("chapter_number", 0))):
                 if not isinstance(chapter_data, dict):

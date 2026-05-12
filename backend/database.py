@@ -68,6 +68,70 @@ def init_db():
     _migrate()
 
 
+def _move_dir_contents(src: Path, dst: Path, label: str):
+    if not src.exists():
+        return
+    try:
+        if src.resolve() == dst.resolve():
+            return
+    except OSError:
+        pass
+    try:
+        dst.mkdir(parents=True, exist_ok=True)
+        for item in src.iterdir():
+            target = dst / item.name
+            if target.exists():
+                target = dst / f"{item.stem}_{os.urandom(4).hex()}{item.suffix}"
+            item.rename(target)
+        try:
+            src.rmdir()
+        except OSError:
+            pass
+    except OSError as exc:
+        logger.warning("Failed to migrate %s %s -> %s: %s", label, src, dst, exc)
+
+
+def _move_file(src: Path, dst: Path, label: str):
+    if not src.exists():
+        return
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        target = dst
+        if target.exists():
+            target = dst.with_name(f"{dst.stem}_{os.urandom(4).hex()}{dst.suffix}")
+        src.rename(target)
+    except OSError as exc:
+        logger.warning("Failed to migrate %s %s -> %s: %s", label, src, dst, exc)
+
+
+def _migrate_asset_directories():
+    """Move legacy ID-based global ref images into stable per-row asset directories."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    tables = set(insp.get_table_names())
+    if "stories" in tables and "asset_key" in {c["name"] for c in insp.get_columns("stories")}:
+        with engine.begin() as conn:
+            rows = conn.execute(text("SELECT id, asset_key FROM stories WHERE asset_key IS NOT NULL AND asset_key <> ''")).mappings().all()
+        for row in rows:
+            story_id = row["id"]
+            asset_key = row["asset_key"]
+            old_story_dir = BASE_DIR / "manga_outputs" / f"story_{story_id}"
+            new_ref_dir = BASE_DIR / "manga_outputs" / "story_assets" / asset_key / "ref_images"
+            _move_dir_contents(old_story_dir / "ref_images", new_ref_dir, "story ref images")
+            _move_file(old_story_dir / "ref_image.png", new_ref_dir / "ref_legacy.png", "legacy story ref image")
+
+    if "story_asset_groups" in tables and "asset_key" in {c["name"] for c in insp.get_columns("story_asset_groups")}:
+        with engine.begin() as conn:
+            rows = conn.execute(text("SELECT id, asset_key FROM story_asset_groups WHERE asset_key IS NOT NULL AND asset_key <> ''")).mappings().all()
+        for row in rows:
+            group_id = row["id"]
+            asset_key = row["asset_key"]
+            old_ref_dir = BASE_DIR / "manga_outputs" / "asset_groups" / f"group_{group_id}" / "ref_images"
+            new_ref_dir = BASE_DIR / "manga_outputs" / "asset_group_assets" / asset_key / "ref_images"
+            _move_dir_contents(old_ref_dir, new_ref_dir, "asset group ref images")
+
+
 def _migrate():
     """Add missing columns to existing tables (poor-man's migration)."""
     from sqlalchemy import inspect, text
@@ -83,6 +147,15 @@ def _migrate():
                 conn.execute(text("ALTER TABLE stories ADD COLUMN ref_image VARCHAR(500)"))
             if "character_profiles" not in cols:
                 conn.execute(text("ALTER TABLE stories ADD COLUMN character_profiles TEXT DEFAULT ''"))
+            if "asset_key" not in cols:
+                conn.execute(text("ALTER TABLE stories ADD COLUMN asset_key VARCHAR(32)"))
+            conn.execute(text("UPDATE stories SET asset_key = lower(hex(randomblob(16))) WHERE asset_key IS NULL OR asset_key = ''"))
+    if "story_asset_groups" in insp.get_table_names():
+        cols = {c["name"] for c in insp.get_columns("story_asset_groups")}
+        with engine.begin() as conn:
+            if "asset_key" not in cols:
+                conn.execute(text("ALTER TABLE story_asset_groups ADD COLUMN asset_key VARCHAR(32)"))
+            conn.execute(text("UPDATE story_asset_groups SET asset_key = lower(hex(randomblob(16))) WHERE asset_key IS NULL OR asset_key = ''"))
     if "chapters" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("chapters")}
         with engine.begin() as conn:
@@ -127,6 +200,7 @@ def _migrate():
             """))
     _cleanup_duplicate_chapters()
     _cleanup_duplicate_manga_images()
+    _migrate_asset_directories()
     _add_unique_constraints()
 
 

@@ -1,4 +1,5 @@
 import datetime
+import uuid
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -15,6 +16,7 @@ class Story(Base):
     cover_image: Mapped[str | None] = mapped_column(String(500), nullable=True)
     ref_image: Mapped[str | None] = mapped_column(String(500), nullable=True)
     character_profiles: Mapped[str | None] = mapped_column(Text, nullable=True, default="")
+    asset_key: Mapped[str | None] = mapped_column(String(32), nullable=True, default=lambda: uuid.uuid4().hex)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
     chapters: Mapped[list["Chapter"]] = relationship("Chapter", back_populates="story", order_by="Chapter.chapter_number", cascade="all, delete-orphan")
@@ -32,6 +34,7 @@ class StoryAssetGroup(Base):
     story_id: Mapped[int] = mapped_column(Integer, ForeignKey("stories.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False, default="设定组")
     character_profiles: Mapped[str | None] = mapped_column(Text, nullable=True, default="")
+    asset_key: Mapped[str | None] = mapped_column(String(32), nullable=True, default=lambda: uuid.uuid4().hex)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
     story: Mapped["Story"] = relationship("Story", back_populates="asset_groups")

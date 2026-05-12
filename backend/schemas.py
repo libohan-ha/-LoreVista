@@ -45,25 +45,25 @@ class StoryOut(BaseModel):
             has_db_ref = bool(ref_image and (Path(__file__).resolve().parent / ref_image).exists())
             story_id = getattr(data, 'id', None)
             has_multi_ref = False
-            has_legacy_ref = False
             has_group_ref = False
             if story_id:
-                story_dir = Path(__file__).resolve().parent / "manga_outputs" / f"story_{story_id}"
-                ref_dir = story_dir / "ref_images"
-                has_multi_ref = ref_dir.exists() and any(
-                    p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
-                    for p in ref_dir.iterdir()
-                )
-                has_legacy_ref = (story_dir / "ref_image.png").exists()
+                asset_key = getattr(data, 'asset_key', None)
+                if asset_key:
+                    keyed_ref_dir = Path(__file__).resolve().parent / "manga_outputs" / "story_assets" / str(asset_key) / "ref_images"
+                    has_multi_ref = keyed_ref_dir.exists() and any(
+                        p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+                        for p in keyed_ref_dir.iterdir()
+                    )
             for group in groups:
-                group_id = getattr(group, 'id', None)
-                if not group_id:
+                group_asset_key = getattr(group, 'asset_key', None)
+                if not group_asset_key:
                     continue
-                ref_dir = Path(__file__).resolve().parent / "manga_outputs" / "asset_groups" / f"group_{group_id}" / "ref_images"
-                if ref_dir.exists() and any(p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for p in ref_dir.iterdir()):
+                keyed_ref_dir = Path(__file__).resolve().parent / "manga_outputs" / "asset_group_assets" / str(group_asset_key) / "ref_images" if group_asset_key else None
+                has_keyed_group_ref = bool(keyed_ref_dir and keyed_ref_dir.exists() and any(p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} for p in keyed_ref_dir.iterdir()))
+                if has_keyed_group_ref:
                     has_group_ref = True
                     break
-            d['has_ref_image'] = has_db_ref or has_multi_ref or has_legacy_ref or has_group_ref
+            d['has_ref_image'] = has_db_ref or has_multi_ref or has_group_ref
             return d
         return data
 
