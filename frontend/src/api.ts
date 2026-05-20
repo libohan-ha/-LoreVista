@@ -368,6 +368,51 @@ export async function getScenes(chapterId: number): Promise<string[]> {
   return data.scenes;
 }
 
+export interface SceneRevisionEntry {
+  instruction: string;
+  before: string[];
+  after: string[];
+}
+
+export async function refineScenes(
+  chapterId: number,
+  payload: {
+    instruction: string;
+    original_scenes: string[];
+    current_scenes: string[];
+    history: SceneRevisionEntry[];
+  },
+): Promise<string[]> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/refine-scenes`, {
+    method: 'POST',
+    headers: apiHeaders(true),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data.scenes;
+}
+
+
+export async function refineSingleScene(
+  chapterId: number,
+  sceneNumber: number,
+  payload: {
+    instruction: string;
+    original_scenes: string[];
+    current_scenes: string[];
+    history: SceneRevisionEntry[];
+  },
+): Promise<{ scene: string; scenes: string[] }> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/refine-scenes/${sceneNumber}`, {
+    method: 'POST',
+    headers: apiHeaders(true),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function updateScenes(chapterId: number, scenes: string[]): Promise<void> {
   const res = await fetch(`${BASE}/api/chapters/${chapterId}/scenes`, {
     method: 'PUT',
@@ -626,11 +671,13 @@ export async function regenerateImage(
   chapterId: number,
   imageNumber: number,
   prompt: string,
+  signal?: AbortSignal,
 ): Promise<{ id: number; image_number: number; image_path: string; prompt: string }> {
   const res = await fetch(`${BASE}/api/chapters/${chapterId}/regenerate-image/${imageNumber}`, {
     method: 'POST',
     headers: apiHeaders(true),
     body: JSON.stringify({ prompt }),
+    signal,
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

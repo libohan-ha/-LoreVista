@@ -161,6 +161,137 @@ async def generate_novel(messages: list[dict], api_key: str | None = None) -> st
         return data["choices"][0]["message"]["content"]
 
 
+async def refine_single_scene(
+    chat_messages: list[dict],
+    all_scenes: list[str],
+    target_scene: str,
+    scene_number: int,
+    instruction: str,
+    original_scenes: list[str] | None = None,
+    history: list[dict] | None = None,
+    character_profiles: str = "",
+    api_key: str | None = None,
+) -> str:
+    """Ask DeepSeek to revise one manga page scene while preserving the rest."""
+    history = history or []
+    original_scenes = original_scenes or all_scenes
+    context = {
+        "scene_number": scene_number,
+        "target_scene": target_scene,
+        "all_current_scenes": all_scenes,
+        "original_scenes": original_scenes,
+        "revision_history": history,
+        "new_instruction": instruction,
+    }
+    prompt = f"""你是一位专业漫画分镜师。请只重写第 {scene_number} 页漫画分镜。
+
+硬性规则：
+- 只输出一个字符串，不要输出 JSON 数组、Markdown 或解释。
+- 这个字符串仍然代表一页漫画，必须包含 4-6 个分镜格。
+- 必须参考整章当前分镜，保持前后剧情连续，但不要改写其他页。
+- 综合原始分镜、当前目标分镜、历史修改记录，以及本轮修改要求。
+
+角色外貌设定：
+{character_profiles or '无'}
+
+以下是单页修改上下文 JSON：
+{json.dumps(context, ensure_ascii=False, indent=2)}
+"""
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": [
+            {"role": "system", "content": "你是漫画分镜专家。只输出重写后的单页分镜字符串。"},
+        ] + chat_messages + [
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+    }
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            f"{DEEPSEEK_BASE_URL}/chat/completions",
+            json=payload,
+            headers=_deepseek_auth_headers(api_key),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        raw = data["choices"][0]["message"]["content"].strip()
+
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+        if raw.endswith("```"):
+            raw = raw[:-3]
+        raw = raw.strip()
+    try:
+        parsed = _loads_json_lenient(raw)
+        if isinstance(parsed, str):
+            raw = parsed.strip()
+    except json.JSONDecodeError:
+        pass
+    if not raw:
+        raise ValueError("Scene refinement response was empty")
+    return raw
+
+async def refine_scenes(
+    chat_messages: list[dict],
+    original_scenes: list[str],
+    current_scenes: list[str],
+    instruction: str,
+    history: list[dict] | None = None,
+    character_profiles: str = "",
+    page_count: int = 10,
+    api_key: str | None = None,
+) -> list[str]:
+    """Ask DeepSeek to revise existing manga page scenes with full iteration context."""
+    history = history or []
+    context = {
+        "original_scenes": original_scenes,
+        "current_scenes": current_scenes,
+        "revision_history": history,
+        "new_instruction": instruction,
+    }
+    refine_prompt = f"""你是一位专业漫画分镜师。请根据用户的新修改要求，重写现有漫画分镜脚本。
+
+硬性规则：
+- 输出 JSON 数组，恰好 {page_count} 个字符串元素。
+- 每个元素代表一页漫画，不是一格；每页仍需包含 4-6 个分镜格。
+- 必须综合原始小说内容、初版分镜、当前分镜、全部历史修改记录，以及本轮修改要求。
+- 保留剧情连续性、角色关系、页数和主要事件顺序，只调整用户要求修改的表现方式。
+- 不要输出解释、Markdown 或额外文本，只输出 JSON 数组。
+
+角色外貌设定：
+{character_profiles or '无'}
+
+以下是分镜迭代上下文 JSON：
+{json.dumps(context, ensure_ascii=False, indent=2)}
+"""
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": [
+            {"role": "system", "content": f"你是漫画分镜专家。输出 JSON 数组，恰好 {page_count} 个元素，每个元素是一页漫画。"},
+        ] + chat_messages + [
+            {"role": "user", "content": refine_prompt},
+        ],
+        "stream": False,
+    }
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            f"{DEEPSEEK_BASE_URL}/chat/completions",
+            json=payload,
+            headers=_deepseek_auth_headers(api_key),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        raw = data["choices"][0]["message"]["content"]
+
+    scenes = _extract_json_array(raw)
+    if not isinstance(scenes, list) or not all(isinstance(scene, str) for scene in scenes):
+        raise ValueError("Scene refinement response must be a JSON array of strings")
+    if len(scenes) != page_count:
+        raise ValueError(f"Expected {page_count} scenes, got {len(scenes)}")
+    return scenes
+
 async def split_scenes(chat_messages: list[dict], character_profiles: str = "", page_count: int = 10, api_key: str | None = None) -> list[str]:
     """Use DeepSeek to split chat novel content into manga page descriptions."""
     scene_prompt = _scene_split_prompt(page_count)

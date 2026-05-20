@@ -31,7 +31,7 @@ from schemas import (
     StoryOut,
     StoryUpdate,
 )
-from services.deepseek import chat_stream, generate_novel, split_scenes
+from services.deepseek import chat_stream, generate_novel, refine_scenes, refine_single_scene, split_scenes
 from services.errors import MissingApiKeyError
 from services.image2 import generate_manga_image
 
@@ -1708,6 +1708,111 @@ async def update_scenes_endpoint(chapter_id: int, body: dict, db: Session = Depe
     return {"ok": True}
 
 
+@app.post("/api/chapters/{chapter_id}/refine-scenes/{scene_number}")
+async def refine_single_scene_endpoint(chapter_id: int, scene_number: int, body: dict, request: Request, db: Session = Depends(get_db)):
+    """Revise one saved scene prompt and keep the rest unchanged."""
+    chapter = _require_chapter(chapter_id, db)
+    image_count = _load_image_count(chapter_id, db)
+    if scene_number < 1 or scene_number > image_count:
+        raise HTTPException(400, f"scene_number must be 1-{image_count}")
+
+    instruction = str(body.get("instruction") or "").strip()
+    if not instruction:
+        raise HTTPException(400, "instruction is required")
+
+    def _scene_list(name: str, fallback: list[str] | None = None) -> list[str]:
+        raw = body.get(name, fallback)
+        if raw is None:
+            raw = []
+        if not isinstance(raw, list) or len(raw) != image_count or not all(isinstance(s, str) and s.strip() for s in raw):
+            raise HTTPException(400, f"{name} must contain exactly {image_count} non-empty scenes")
+        return [s.strip() for s in raw]
+
+    saved_scenes = _parse_scenes_text(chapter.scenes_text)
+    current_scenes = _scene_list("current_scenes", saved_scenes)
+    original_scenes = _scene_list("original_scenes", current_scenes)
+    history = body.get("history", [])
+    if not isinstance(history, list):
+        raise HTTPException(400, "history must be a list")
+
+    chat_history = [{"role": m.role, "content": m.content} for m in chapter.messages]
+    if not chat_history and chapter.novel_content:
+        chat_history = [{"role": "user", "content": chapter.novel_content}]
+    if not chat_history:
+        raise HTTPException(400, "No source content found for scene refinement")
+
+    try:
+        scene = await refine_single_scene(
+            chat_messages=chat_history,
+            all_scenes=current_scenes,
+            target_scene=current_scenes[scene_number - 1],
+            scene_number=scene_number,
+            instruction=instruction,
+            original_scenes=original_scenes,
+            history=history,
+            character_profiles=_load_characters(chapter_id, db),
+            api_key=_user_deepseek_api_key(request),
+        )
+    except ValueError as exc:
+        logger.warning("Failed to parse single scene refinement response for chapter %s scene %s: %s", chapter_id, scene_number, exc)
+        raise HTTPException(502, "AI returned invalid scene text. Please retry refining this scene.")
+
+    scenes = list(current_scenes)
+    scenes[scene_number - 1] = scene.strip()
+    _save_chapter_scenes(chapter, scenes)
+    db.commit()
+    return {"scene": scenes[scene_number - 1], "scenes": scenes}
+
+@app.post("/api/chapters/{chapter_id}/refine-scenes")
+async def refine_scenes_endpoint(chapter_id: int, body: dict, request: Request, db: Session = Depends(get_db)):
+    """Revise saved scene prompts using an instruction and previous refinement context."""
+    chapter = _require_chapter(chapter_id, db)
+    image_count = _load_image_count(chapter_id, db)
+
+    instruction = str(body.get("instruction") or "").strip()
+    if not instruction:
+        raise HTTPException(400, "instruction is required")
+
+    def _scene_list(name: str, fallback: list[str] | None = None) -> list[str]:
+        raw = body.get(name, fallback)
+        if raw is None:
+            raw = []
+        if not isinstance(raw, list) or len(raw) != image_count or not all(isinstance(s, str) and s.strip() for s in raw):
+            raise HTTPException(400, f"{name} must contain exactly {image_count} non-empty scenes")
+        return [s.strip() for s in raw]
+
+    saved_scenes = _parse_scenes_text(chapter.scenes_text)
+    current_scenes = _scene_list("current_scenes", saved_scenes)
+    original_scenes = _scene_list("original_scenes", current_scenes)
+    history = body.get("history", [])
+    if not isinstance(history, list):
+        raise HTTPException(400, "history must be a list")
+
+    chat_history = [{"role": m.role, "content": m.content} for m in chapter.messages]
+    if not chat_history and chapter.novel_content:
+        chat_history = [{"role": "user", "content": chapter.novel_content}]
+    if not chat_history:
+        raise HTTPException(400, "No source content found for scene refinement")
+
+    try:
+        scenes = await refine_scenes(
+            chat_messages=chat_history,
+            original_scenes=original_scenes,
+            current_scenes=current_scenes,
+            instruction=instruction,
+            history=history,
+            character_profiles=_load_characters(chapter_id, db),
+            page_count=image_count,
+            api_key=_user_deepseek_api_key(request),
+        )
+    except ValueError as exc:
+        logger.warning("Failed to parse scene refinement response for chapter %s: %s", chapter_id, exc)
+        raise HTTPException(502, "AI returned invalid scene JSON. Please retry refining scenes.")
+
+    _save_chapter_scenes(chapter, scenes)
+    db.commit()
+    return {"scenes": scenes}
+
 # ─── SSE for manga image generation ─────────────────────
 
 class MangaGenerationJob:
@@ -1927,5 +2032,5 @@ if __name__ == "__main__":
         "main:app",
         host=os.getenv("HOST", "127.0.0.1"),
         port=int(os.getenv("PORT", "8000")),
-        reload=os.getenv("RELOAD", "true").lower() == "true",
+        reload=os.getenv("RELOAD", "false").lower() == "true",
     )

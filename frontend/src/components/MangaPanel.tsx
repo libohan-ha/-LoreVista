@@ -3,6 +3,8 @@ import { ChevronUp, ChevronDown, Download, ImageIcon, Loader2, Sparkles, Pencil,
 import {
   generateMangaStream,
   generateScenes,
+  refineScenes,
+  refineSingleScene,
   getScenes,
   updateScenes,
   regenerateImage,
@@ -28,6 +30,7 @@ import {
   type RefImage,
   type CharacterSource,
   type AssetGroup,
+  type SceneRevisionEntry,
 } from '../api';
 import { genStore } from '../genStore';
 
@@ -43,6 +46,7 @@ interface ImageItem {
 }
 
 type Phase = 'idle' | 'generating-scenes' | 'editing-scenes' | 'generating-images';
+type SceneRevisionDraft = SceneRevisionEntry;
 const DEFAULT_IMAGE_COUNT = 10;
 
 export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
@@ -53,11 +57,17 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const [lightboxIdx, setLightboxIdx] = useState<number>(-1);
   const [errorMsg, setErrorMsg] = useState('');
   const [scenes, setScenes] = useState<string[]>([]);
+  const [originalScenes, setOriginalScenes] = useState<string[]>([]);
+  const [sceneRevisionHistory, setSceneRevisionHistory] = useState<SceneRevisionDraft[]>([]);
+  const [refineModalOpen, setRefineModalOpen] = useState(false);
+  const [refineInstruction, setRefineInstruction] = useState('');
+  const [refineTargetIdx, setRefineTargetIdx] = useState<number | null>(null);
   const [expandedScenes, setExpandedScenes] = useState<Set<number>>(() => new Set());
   const [editingIdx, setEditingIdx] = useState<number>(-1);
   const [editText, setEditText] = useState('');
   const [savingScenes, setSavingScenes] = useState(false);
   const [regenIdx, setRegenIdx] = useState<number>(-1);
+  const [imageVersions, setImageVersions] = useState<Record<number, number>>({});
   const [charText, setCharText] = useState('');
   const [charSource, setCharSource] = useState<CharacterSource>('none');
   const [assetGroups, setAssetGroups] = useState<AssetGroup[]>([]);
@@ -106,6 +116,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     setExpandedScenes(new Set());
     setEditingIdx(-1);
     setRegenIdx(-1);
+    setImageVersions({});
     setCharText('');
     setCharSource('none');
     setAssetGroups([]);
@@ -142,6 +153,19 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
         if (chapterLoadRequestRef.current !== requestId) return;
         if (s.length > 0) {
           setScenes(s);
+          setOriginalScenes(s);
+          try {
+            const saved = localStorage.getItem(`lorevista.sceneRevision.${chapter.id}`);
+            if (saved) {
+              const parsed = JSON.parse(saved) as { originalScenes?: string[]; history?: SceneRevisionDraft[] };
+              if (Array.isArray(parsed.originalScenes) && parsed.originalScenes.length === s.length) {
+                setOriginalScenes(parsed.originalScenes);
+              }
+              if (Array.isArray(parsed.history)) setSceneRevisionHistory(parsed.history);
+            }
+          } catch {
+            setSceneRevisionHistory([]);
+          }
           setPhase('editing-scenes');
         }
       }).catch(() => {});
@@ -211,10 +235,20 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   };
 
   // ── Scene generation ──
+  const persistSceneRevisionState = (chapterId: number, original: string[], history: SceneRevisionDraft[]) => {
+    localStorage.setItem(`lorevista.sceneRevision.${chapterId}`, JSON.stringify({ originalScenes: original, history }));
+  };
+
   const handleGenerateScenes = async () => {
     if (!chapter) return;
     if (!chapter.messages || chapter.messages.length === 0) {
       alert('请先在左侧进行对话');
+      return;
+    }
+    if (scenes.length > 0) {
+      setRefineInstruction('');
+      setRefineTargetIdx(null);
+      setRefineModalOpen(true);
       return;
     }
     setPhase('generating-scenes');
@@ -222,24 +256,75 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     const controller = new AbortController();
     sceneAbortRef.current = controller;
     const requestId = chapterLoadRequestRef.current;
-    const hadScenes = scenes.length > 0;
     try {
       const result = await generateScenes(chapter.id, controller.signal);
       if (chapterLoadRequestRef.current !== requestId) return;
       setScenes(result);
+      setOriginalScenes(result);
+      setSceneRevisionHistory([]);
+      persistSceneRevisionState(chapter.id, result, []);
       setPhase('editing-scenes');
     } catch (err: any) {
       if (chapterLoadRequestRef.current !== requestId) return;
-      if (err.name === 'AbortError') {
-        setPhase(hadScenes ? 'editing-scenes' : 'idle');
-      } else {
+      if (err.name === 'AbortError') setPhase('idle');
+      else {
         setErrorMsg(err.message);
-        setPhase(hadScenes ? 'editing-scenes' : 'idle');
+        setPhase('idle');
       }
     } finally {
       if (sceneAbortRef.current === controller) {
         sceneAbortRef.current = null;
       }
+    }
+  };
+
+  const openSingleSceneRefine = (idx: number) => {
+    setRefineInstruction('');
+    setRefineTargetIdx(idx);
+    setRefineModalOpen(true);
+  };
+
+  const handleRefineScenes = async () => {
+    if (!chapter) return;
+    const instruction = refineInstruction.trim();
+    if (!instruction) {
+      setErrorMsg('请输入要如何修改分镜脚本');
+      return;
+    }
+    const before = [...scenes];
+    const original = originalScenes.length === scenes.length ? originalScenes : before;
+    setPhase('generating-scenes');
+    setErrorMsg('');
+    setRefineModalOpen(false);
+    try {
+      const result = refineTargetIdx === null
+        ? await refineScenes(chapter.id, {
+          instruction,
+          original_scenes: original,
+          current_scenes: before,
+          history: sceneRevisionHistory,
+        })
+        : (await refineSingleScene(chapter.id, refineTargetIdx + 1, {
+          instruction,
+          original_scenes: original,
+          current_scenes: before,
+          history: sceneRevisionHistory,
+        })).scenes;
+      setScenes(result);
+      setOriginalScenes(original);
+      const nextHistory = [...sceneRevisionHistory, {
+        instruction: refineTargetIdx === null ? instruction : `第${refineTargetIdx + 1}页：${instruction}`,
+        before,
+        after: result,
+      }];
+      setSceneRevisionHistory(nextHistory);
+      persistSceneRevisionState(chapter.id, original, nextHistory);
+      setPhase('editing-scenes');
+      setRefineInstruction('');
+      setRefineTargetIdx(null);
+    } catch (err: any) {
+      setErrorMsg(err.message);
+      setPhase('editing-scenes');
     }
   };
 
@@ -287,12 +372,14 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     if (!chapter) return;
     const prompt = scenes[imageNumber - 1];
     if (!prompt) return;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 12 * 60 * 1000);
     setRegenIdx(imageNumber);
     setErrorMsg('');
     try {
       // Save scenes first
       await updateScenes(chapter.id, scenes);
-      const result = await regenerateImage(chapter.id, imageNumber, prompt);
+      const result = await regenerateImage(chapter.id, imageNumber, prompt, controller.signal);
       // Update in images list
       const newItem: ImageItem = {
         image_number: result.image_number,
@@ -306,14 +393,18 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
         else updated.push(newItem);
         return updated.sort((a, b) => a.image_number - b.image_number);
       });
+      setImageVersions((prev) => ({ ...prev, [imageNumber]: Date.now() }));
+      onChapterRefresh?.(chapter.id);
     } catch (err: any) {
-      setErrorMsg(`第${imageNumber}张重新生成失败: ${err.message}`);
+      const message = err?.name === 'AbortError' ? '图片生成等待超时或连接中断，请刷新章节确认是否已经保存' : err.message;
+      setErrorMsg(`第${imageNumber}张重新生成失败: ${message}`);
     } finally {
+      window.clearTimeout(timeoutId);
       setRegenIdx(-1);
     }
   };
 
-  // ── Close color menu on outside click ──
+  // Close color menu on outside click
   useEffect(() => {
     if (!showColorMenu) return;
     const handler = (e: MouseEvent) => {
@@ -882,7 +973,10 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                           <button onClick={() => setEditingIdx(-1)} className="p-1 rounded hover:bg-gray-700 text-gray-500 transition-colors"><X size={14} /></button>
                         </>
                       ) : (
-                        <button onClick={() => handleSceneEdit(idx)} className="p-1 rounded hover:bg-gray-700 text-gray-600 hover:text-gray-300 transition-colors"><Pencil size={12} /></button>
+                        <>
+                          <button onClick={() => openSingleSceneRefine(idx)} className="p-1 rounded hover:bg-violet-900/70 text-violet-400 hover:text-violet-200 transition-colors" title="AI 修改此页"><Sparkles size={12} /></button>
+                          <button onClick={() => handleSceneEdit(idx)} className="p-1 rounded hover:bg-gray-700 text-gray-600 hover:text-gray-300 transition-colors" title="手动编辑"><Pencil size={12} /></button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -918,7 +1012,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                   }}
                 >
                   <img
-                    src={mangaThumbUrl(img.image_path, 1280, isRegenerating ? Date.now() : undefined)!}
+                    src={mangaThumbUrl(img.image_path, 1280, isRegenerating ? Date.now() : imageVersions[image_number])!}
                     alt={`Panel ${image_number}`}
                     className={`w-full object-contain ${isRegenerating ? 'opacity-30' : ''}`}
                     loading="lazy"
@@ -933,7 +1027,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                         e.stopPropagation();
                         handleRegenImage(image_number);
                       }}
-                      className="absolute top-3 right-3 p-1.5 rounded-md bg-black/70 hover:bg-amber-500 text-white hover:text-gray-950 transition-colors"
+                      className="absolute top-3 right-3 z-10 p-1.5 rounded-md bg-black/70 hover:bg-amber-500 text-white hover:text-gray-950 transition-colors"
                       title="重新生成此图"
                     >
                       <RefreshCw size={12} />
@@ -948,7 +1042,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                     </div>
                   )}
                   {!isRegenerating && (
-                    <div className="absolute inset-0 bg-black/0 hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 hover:opacity-100">
+                    <div className="pointer-events-none absolute inset-0 bg-black/0 hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 hover:opacity-100">
                       <span className="bg-black/60 text-white text-xs px-3 py-1 rounded-full">点击放大</span>
                     </div>
                   )}
@@ -996,7 +1090,10 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                             <button onClick={() => setEditingIdx(-1)} className="p-1 rounded hover:bg-gray-700 text-gray-500 transition-colors" title="取消"><X size={13} /></button>
                           </>
                         ) : (
-                          <button onClick={() => handleSceneEdit(sceneIdx)} className="p-1 rounded hover:bg-gray-700 text-gray-600 hover:text-gray-300 transition-colors" title="编辑分镜"><Pencil size={12} /></button>
+                          <>
+                            <button onClick={() => openSingleSceneRefine(sceneIdx)} className="p-1 rounded hover:bg-violet-900/70 text-violet-400 hover:text-violet-200 transition-colors" title="AI 修改此页"><Sparkles size={12} /></button>
+                            <button onClick={() => handleSceneEdit(sceneIdx)} className="p-1 rounded hover:bg-gray-700 text-gray-600 hover:text-gray-300 transition-colors" title="手动编辑"><Pencil size={12} /></button>
+                          </>
                         )}
                       </div>
                     </div>
@@ -1054,7 +1151,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
           )}
           {/* Image */}
           <img
-            src={mangaImageUrl(lightboxImg.image_path)}
+            src={mangaImageUrl(lightboxImg.image_path, imageVersions[lightboxImg.image_number])}
             alt={`Panel ${lightboxImg.image_number}`}
             className="max-w-[90%] max-h-[75vh] object-contain rounded-lg"
             onClick={(e) => e.stopPropagation()}
@@ -1072,6 +1169,36 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
       )}
 
       {/* Reference images management modal */}
+      {refineModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setRefineModalOpen(false)}>
+          <div className="w-full max-w-xl bg-gray-900 border border-gray-800 rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+              <h3 className="text-sm font-semibold text-gray-200">修改分镜脚本</h3>
+              <button onClick={() => setRefineModalOpen(false)} className="p-1 text-gray-500 hover:text-white rounded transition-colors">
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <textarea
+                value={refineInstruction}
+                onChange={(e) => setRefineInstruction(e.target.value)}
+                placeholder="例如：动作需要更加细腻，增加角色微表情，让打斗节奏更紧张"
+                className="w-full h-32 bg-gray-950 border border-gray-800 rounded-md px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-violet-600 resize-none"
+                autoFocus
+              />
+              {sceneRevisionHistory.length > 0 && (
+                <p className="text-xs text-gray-500">已包含 {sceneRevisionHistory.length} 轮修改记录，DeepSeek 会一起参考。</p>
+              )}
+            </div>
+            <div className="px-5 py-4 border-t border-gray-800 flex justify-end gap-2">
+              <button onClick={() => setRefineModalOpen(false)} className="px-3 py-1.5 text-xs rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors">取消</button>
+              <button onClick={handleRefineScenes} disabled={!refineInstruction.trim()} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                <Sparkles size={13} /> 开始修改
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {refModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
