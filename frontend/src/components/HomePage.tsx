@@ -201,7 +201,7 @@ export default function HomePage({ onSelectStory }: Props) {
       replaceAssetGroup(activeAssetGroup.id, patch);
       updateAssetFlags(assetModalStoryId, assetGroups.map((g) => (g.id === activeAssetGroup.id ? { ...g, ...patch } : g)));
     } catch (err: any) {
-      alert(`上传垫图失败: ${err.message}`);
+      alert(`上传参考图失败: ${err.message}`);
     } finally {
       setAssetRefUploading(false);
     }
@@ -217,7 +217,7 @@ export default function HomePage({ onSelectStory }: Props) {
       replaceAssetGroup(activeAssetGroup.id, patch);
       updateAssetFlags(assetModalStoryId, assetGroups.map((g) => (g.id === activeAssetGroup.id ? { ...g, ...patch } : g)));
     } catch (err: any) {
-      alert(`删除垫图失败: ${err.message}`);
+      alert(`删除参考图失败: ${err.message}`);
     }
   };
 
@@ -249,7 +249,7 @@ export default function HomePage({ onSelectStory }: Props) {
       setRefModalMax(r.max);
       setStoryRefFlags((prev) => ({ ...prev, [refModalStoryId]: r.images.length > 0 }));
     } catch (err: any) {
-      alert(`上传垫图失败: ${err.message}`);
+      alert(`上传参考图失败: ${err.message}`);
     } finally {
       setRefModalUploading(false);
     }
@@ -262,7 +262,7 @@ export default function HomePage({ onSelectStory }: Props) {
       setRefModalImages(r.images);
       setStoryRefFlags((prev) => ({ ...prev, [refModalStoryId]: r.images.length > 0 }));
     } catch (err: any) {
-      alert(`删除垫图失败: ${err.message}`);
+      alert(`删除参考图失败: ${err.message}`);
     }
   };
 
@@ -300,7 +300,7 @@ export default function HomePage({ onSelectStory }: Props) {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('确定要删除这本小说吗？所有章节、对话、漫画都将被永久删除！')) return;
+    if (!confirm('确定要删除这个项目吗？所有集数、Brief、生成画面都将被永久删除！')) return;
     await deleteStory(id);
     setStories((prev) => prev.filter((s) => s.id !== id));
   };
@@ -436,8 +436,8 @@ export default function HomePage({ onSelectStory }: Props) {
               <Sparkles size={18} className="text-white" />
             </div>
             <div>
-              <h1 className="text-lg font-bold tracking-tight">LoreVista</h1>
-              <p className="text-xs text-gray-500">AI 小说 · 漫画工坊</p>
+              <h1 className="text-lg font-bold tracking-tight">OPC-LoreVista</h1>
+              <p className="text-xs text-gray-500">AI短剧 · 漫剧生产控制台</p>
             </div>
           </div>
           <button
@@ -456,7 +456,7 @@ export default function HomePage({ onSelectStory }: Props) {
                        text-white text-sm font-medium rounded-lg transition-colors shadow-lg shadow-violet-900/30"
           >
             <Plus size={16} />
-            新建小说
+            新建项目
           </button>
         </div>
       </header>
@@ -468,12 +468,12 @@ export default function HomePage({ onSelectStory }: Props) {
           <div className="mb-8 bg-gray-900 border border-gray-700 rounded-xl p-6 shadow-2xl">
             <h3 className="text-base font-semibold mb-4 flex items-center gap-2">
               <Plus size={16} className="text-violet-400" />
-              创建新小说
+              创建新项目
             </h3>
             <div className="space-y-3">
               <input
                 autoFocus
-                placeholder="小说名称"
+                placeholder="项目名称"
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
@@ -481,7 +481,7 @@ export default function HomePage({ onSelectStory }: Props) {
                            placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
               />
               <textarea
-                placeholder="简短描述（可选）"
+                placeholder="项目 Brief（可选）"
                 value={newDesc}
                 onChange={(e) => setNewDesc(e.target.value)}
                 rows={2}
@@ -510,14 +510,14 @@ export default function HomePage({ onSelectStory }: Props) {
         {stories.length === 0 && !showNew && (
           <div className="flex flex-col items-center justify-center py-32 text-gray-500">
             <BookOpenText size={56} className="mb-4 text-gray-700" />
-            <p className="text-lg font-medium mb-2">还没有小说</p>
-            <p className="text-sm mb-6">点击"新建小说"开始你的创作之旅</p>
+            <p className="text-lg font-medium mb-2">还没有项目</p>
+            <p className="text-sm mb-6">点击“新建项目”开始 OPC 生产流程</p>
             <button
               onClick={() => setShowNew(true)}
               className="px-5 py-2.5 bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium rounded-lg transition-colors"
             >
               <Plus size={16} className="inline mr-1" />
-              新建小说
+              新建项目
             </button>
           </div>
         )}
@@ -572,7 +572,7 @@ export default function HomePage({ onSelectStory }: Props) {
                         rows={2}
                         className="w-full px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm
                                    focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none"
-                        placeholder="简短描述（可选）"
+                        placeholder="项目 Brief（可选）"
                       />
                       <div className="flex gap-1 justify-end">
                         <button
@@ -611,7 +611,7 @@ export default function HomePage({ onSelectStory }: Props) {
                                 ? 'text-emerald-400 hover:text-emerald-300'
                                 : 'text-gray-600 hover:text-gray-300'
                             }`}
-                            title={storyCharFlags[s.id] ? '角色卡（已设定）' : '设置角色卡'}
+                            title={storyCharFlags[s.id] ? '角色锁定（已设定）' : '设置角色锁定'}
                           >
                             <Users size={13} />
                           </button>
@@ -625,7 +625,7 @@ export default function HomePage({ onSelectStory }: Props) {
                                 ? 'text-amber-400 hover:text-amber-300'
                                 : 'text-gray-600 hover:text-gray-300'
                             }`}
-                            title={storyRefFlags[s.id] ? '默认垫图（已设定）' : '设置默认垫图'}
+                            title={storyRefFlags[s.id] ? '默认参考图（已设定）' : '设置默认参考图'}
                           >
                             <ImagePlus size={13} />
                           </button>
@@ -665,7 +665,7 @@ export default function HomePage({ onSelectStory }: Props) {
                             className="flex items-center gap-1 px-3 py-1.5 bg-violet-600/20 hover:bg-violet-600
                                        text-violet-400 hover:text-white text-xs font-medium rounded-lg transition-colors"
                           >
-                            进入
+                            进入生产
                             <ChevronRight size={13} />
                           </button>
                         </div>
@@ -735,7 +735,7 @@ export default function HomePage({ onSelectStory }: Props) {
                             {group.is_default && <span className="text-[10px] text-blue-300 shrink-0">默认</span>}
                           </div>
                           <div className="mt-1 text-[10px] text-gray-500">
-                            {group.has_character_profiles ? '角色卡' : '无角色卡'} · {group.ref_count} 张垫图
+                            {group.has_character_profiles ? '角色锁定' : '无角色锁定'} · {group.ref_count} 张参考图
                           </div>
                         </button>
                       );
@@ -777,21 +777,21 @@ export default function HomePage({ onSelectStory }: Props) {
                             disabled={assetModalSaving}
                             className="px-5 py-2 bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-40"
                           >
-                            {assetModalSaving ? '保存中…' : '保存角色卡'}
+                            {assetModalSaving ? '保存中…' : '保存角色锁定'}
                           </button>
                         </div>
                       </div>
 
                       <div className="flex-1 overflow-y-auto p-4">
                         <div className="flex items-center justify-between mb-3">
-                          <div className="text-xs text-gray-500">本组垫图 {activeAssetGroup.ref_count}/{refModalMax} 张</div>
+                          <div className="text-xs text-gray-500">本组参考图 {activeAssetGroup.ref_count}/{refModalMax} 张</div>
                           <button
                             onClick={() => assetFileRef.current?.click()}
                             disabled={assetRefUploading || activeAssetGroup.ref_count >= refModalMax}
                             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-30 transition-colors"
                           >
                             {assetRefUploading ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
-                            添加垫图
+                            添加参考图
                           </button>
                         </div>
                         {activeAssetGroup.ref_images.length === 0 ? (
@@ -801,7 +801,7 @@ export default function HomePage({ onSelectStory }: Props) {
                             className="w-full flex flex-col items-center justify-center py-12 border-2 border-dashed border-gray-700 hover:border-amber-500/50 rounded-lg text-gray-500 hover:text-gray-400 transition-colors disabled:opacity-40"
                           >
                             <ImagePlus size={28} className="mb-2" />
-                            <span className="text-sm">点击上传本组第一张垫图</span>
+                            <span className="text-sm">点击上传本组第一张参考图</span>
                           </button>
                         ) : (
                           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -820,7 +820,7 @@ export default function HomePage({ onSelectStory }: Props) {
                                 <button
                                   onClick={() => handleAssetRefDelete(img.filename)}
                                   className="absolute top-1.5 right-1.5 p-1 rounded-md bg-red-600 hover:bg-red-500 text-white shadow-lg transition-colors"
-                                  title="删除垫图"
+                                  title="删除参考图"
                                 >
                                   <Trash2 size={12} />
                                 </button>
@@ -922,7 +922,7 @@ export default function HomePage({ onSelectStory }: Props) {
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
               <h3 className="text-sm font-semibold flex items-center gap-2">
                 <ImagePlus size={16} className="text-amber-400" />
-                全局默认垫图
+                全局默认参考图
                 <span className="text-xs font-normal text-gray-500">
                   {refModalImages.length}/{refModalMax} 张
                 </span>
@@ -936,7 +936,7 @@ export default function HomePage({ onSelectStory }: Props) {
             </div>
             <div className="flex-1 overflow-y-auto px-5 py-4">
               <p className="text-xs text-gray-500 mb-4 leading-relaxed">
-                上传默认垫图（最多 {refModalMax} 张），所有章节默认继承，用作人物外貌和画面参考。章节内也可单独覆盖。
+                上传默认参考图（最多 {refModalMax} 张），所有集数默认继承，用作人物外貌和画面参考。单集内也可单独覆盖。
               </p>
               {refModalLoading ? (
                 <div className="flex items-center justify-center py-12 text-gray-500">
@@ -955,7 +955,7 @@ export default function HomePage({ onSelectStory }: Props) {
                   ) : (
                     <ImagePlus size={28} className="mb-2" />
                   )}
-                  <span className="text-sm">{refModalUploading ? '上传中…' : '点击上传第一张垫图'}</span>
+                  <span className="text-sm">{refModalUploading ? '上传中…' : '点击上传第一张参考图'}</span>
                 </button>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -1006,10 +1006,10 @@ export default function HomePage({ onSelectStory }: Props) {
                 className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg
                            bg-violet-600 hover:bg-violet-500 text-white
                            disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                title={refModalImages.length >= refModalMax ? `已达上限 ${refModalMax} 张` : '上传一张垫图'}
+                title={refModalImages.length >= refModalMax ? `已达上限 ${refModalMax} 张` : '上传一张参考图'}
               >
                 {refModalUploading ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
-                {refModalImages.length === 0 ? '上传垫图' : '添加一张'}
+                {refModalImages.length === 0 ? '上传参考图' : '添加一张'}
               </button>
               <button
                 onClick={() => setRefModalStoryId(null)}

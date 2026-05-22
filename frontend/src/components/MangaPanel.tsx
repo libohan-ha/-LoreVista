@@ -214,7 +214,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const handleGenerateScenes = async () => {
     if (!chapter) return;
     if (!chapter.messages || chapter.messages.length === 0) {
-      alert('请先在左侧进行对话');
+      alert('请先在左侧进行星络 Brief');
       return;
     }
     setPhase('generating-scenes');
@@ -363,7 +363,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
           genStore.patch(targetId, {
             current: event.data.current,
             total: event.data.total,
-            statusMsg: `正在生成第 ${event.data.current}/${event.data.total} 张漫画…`,
+            statusMsg: `正在生成第 ${event.data.current}/${event.data.total} 张画面…`,
           });
           break;
         case 'image':
@@ -466,7 +466,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
       {/* Header */}
       <div className="px-3 md:px-5 py-3 border-b border-gray-800 flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-gray-200 tracking-wide uppercase shrink-0 hidden md:block">
-          第 {chapter?.chapter_number ?? '–'} 话 · 漫画
+          第 {chapter?.chapter_number ?? '–'} 集 · 分镜生成
         </h2>
         <div className="flex items-center gap-1.5 md:gap-2 flex-wrap justify-end">
           {assetGroups.length > 0 && (
@@ -475,7 +475,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
               onChange={(e) => handleSelectAssetGroup(e.target.value)}
               disabled={!chapter || generating || assetGroupSaving}
               className="max-w-[160px] px-2 py-1.5 text-xs font-medium rounded-md bg-gray-800 text-gray-300 border border-gray-700 outline-none focus:border-violet-500 transition-colors disabled:opacity-50"
-              title="选择本话继承的全局角色卡和垫图组"
+              title="选择本集继承的全局角色锁定和参考图组"
             >
               {assetGroups.map((group) => (
                 <option key={group.id ?? 'default'} value={group.id ?? ''}>
@@ -484,7 +484,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
               ))}
             </select>
           )}
-          {/* 垫图 (Reference Images, 多图) */}
+          {/* Reference Images */}
           <div className="flex items-center gap-1">
             <input
               ref={refFileRef}
@@ -506,7 +506,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                   setRefSource(r.source ?? 'chapter');
                   setRefMax(r.max);
                 } catch (err: any) {
-                  setErrorMsg(`上传垫图失败: ${err.message}`);
+                  setErrorMsg(`上传参考图失败: ${err.message}`);
                 } finally {
                   setRefUploading(false);
                   e.target.value = '';
@@ -524,17 +524,17 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
               title={
                 refImages.length > 0
                   ? refSource === 'story' || refSource === 'asset_group'
-                    ? `全局垫图 ${refImages.length} 张· 点击查看/管理`
-                    : `已设置 ${refImages.length} 张垫图· 点击查看/管理`
-                  : '点击上传垫图参考'
+                    ? `全局参考图 ${refImages.length} 张· 点击查看/管理`
+                    : `已设置 ${refImages.length} 张参考图· 点击查看/管理`
+                  : '点击上传参考图'
               }
             >
               <ImagePlus size={13} />
               {refImages.length > 0
                 ? refSource === 'story' || refSource === 'asset_group'
-                  ? `全局垫图 ${refImages.length}`
-                  : `已垫图 ${refImages.length}`
-                : '垫图'}
+                  ? `全局参考图 ${refImages.length}`
+                  : `已参考图 ${refImages.length}`
+                : '参考图'}
             </button>
           </div>
           {/* Image count selector */}
@@ -619,7 +619,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                         ${colorMode === 'bw' ? 'text-amber-400 font-semibold' : 'text-gray-300'}`}
                     >
                       <span className="w-4 h-4 rounded border-2 border-gray-500 bg-gradient-to-br from-white to-gray-900 shrink-0" />
-                      黑白漫画
+                      黑白画面
                       {colorMode === 'bw' && <Check size={12} className="ml-auto text-amber-400" />}
                     </button>
                     <button
@@ -628,7 +628,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                         ${colorMode === 'color' ? 'text-amber-400 font-semibold' : 'text-gray-300'}`}
                     >
                       <span className="w-4 h-4 rounded border-2 border-gray-500 bg-gradient-to-br from-pink-400 via-blue-400 to-green-400 shrink-0" />
-                      彩色漫画
+                      彩色画面
                       {colorMode === 'color' && <Check size={12} className="ml-auto text-amber-400" />}
                     </button>
                   </div>
@@ -641,7 +641,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                            bg-amber-500 hover:bg-amber-400 text-gray-950 transition-colors"
               >
                 <Sparkles size={13} />
-                {existingImages.length > 0 && existingImages.length < imageCount ? '继续生成漫画' : '生成漫画'}
+                {existingImages.length > 0 && existingImages.length < imageCount ? '继续生成画面' : '生成画面'}
               </button>
             </>
           )}
@@ -686,7 +686,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                 onClick={handleAbortManga}
                 className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md
                            bg-red-900/50 hover:bg-red-800 text-red-300 border border-red-700 transition-colors"
-                title="停止生成漫画"
+                title="停止生成画面"
               >
                 <Square size={10} />
                 停止
@@ -753,7 +753,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                   <span className="text-[10px] font-normal normal-case px-1.5 py-0.5 rounded bg-violet-900/50 text-violet-300 border border-violet-800/50">来自设定组</span>
                 )}
                 {charText && charSource === 'chapter' && (
-                  <span className="text-[10px] font-normal normal-case px-1.5 py-0.5 rounded bg-emerald-900/50 text-emerald-400 border border-emerald-800/50">本话自定义</span>
+                  <span className="text-[10px] font-normal normal-case px-1.5 py-0.5 rounded bg-emerald-900/50 text-emerald-400 border border-emerald-800/50">本集自定义</span>
                 )}
                 {!charText && '（未设定）'}
               </span>
@@ -768,7 +768,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                       onChange={(e) => setCharDraft(e.target.value)}
                       className="w-full bg-gray-800 text-xs text-gray-200 rounded p-2 resize-none outline-none border border-gray-700 focus:border-violet-500 leading-relaxed"
                       rows={12}
-                      placeholder={`角色名：塞蕾娜\n性别：女\n发色与发型：银灰色长发...\n（粘贴完整角色卡）`}
+                      placeholder={`角色名：塞蕾娜\n性别：女\n发色与发型：银灰色长发...\n（粘贴完整角色锁定描述）`}
                       autoFocus
                     />
                     <div className="flex justify-end gap-2 mt-2">
@@ -793,7 +793,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                           }
                         }}
                         className="px-3 py-1 text-xs rounded bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-40 transition-colors"
-                      >{charSaving ? '保存中…' : '保存（本话覆盖）'}</button>
+                      >{charSaving ? '保存中…' : '保存（本集覆盖）'}</button>
                     </div>
                   </>
                 ) : charText ? (
@@ -826,7 +826,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                   <button
                     onClick={() => { setCharDraft(''); setCharEditing(true); }}
                     className="text-xs text-violet-400 hover:text-violet-300 transition-colors"
-                  >+ 添加角色卡（粘贴 AI 生成的角色外貌描述）</button>
+                  >+ 添加角色锁定（粘贴 AI 生成的角色外貌描述）</button>
                 )}
               </div>
             )}
@@ -896,7 +896,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
         {displayImages.length === 0 && !generating && scenes.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-gray-600 gap-3">
             <ImageIcon size={48} strokeWidth={1} />
-            <span className="text-sm">对话后点击上方按钮生成分镜</span>
+            <span className="text-sm">星络 Brief 后点击上方按钮生成分镜</span>
           </div>
         )}
 
@@ -1084,7 +1084,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800">
               <div className="flex items-center gap-2">
                 <ImagePlus size={16} className="text-emerald-400" />
-                <h3 className="text-sm font-semibold text-gray-200">垫图管理</h3>
+                <h3 className="text-sm font-semibold text-gray-200">参考图管理</h3>
                 <span className="text-xs text-gray-500">
                   {refImages.length}/{refMax} 张
                   {(refSource === 'story' || refSource === 'asset_group') && refImages.length > 0 && (
@@ -1101,15 +1101,15 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             </div>
             <div className="flex-1 overflow-y-auto p-5">
               <p className="text-xs text-gray-500 mb-4 leading-relaxed">
-                上传角色参考图，AI 生成漫画时会保持人物外貌一致性。
+                上传角色参考图，AI 生成画面时会保持人物外貌一致性。
                 {(refSource === 'story' || refSource === 'asset_group') && refImages.length > 0 && (
-                  <> 当前显示首页设置的全局垫图；上传新图将创建本话专属垫图覆盖全局。</>
+                  <> 当前显示首页设置的全局参考图；上传新图将创建本集专属参考图覆盖全局。</>
                 )}
               </p>
               {refImages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-gray-600 text-sm gap-2 border border-dashed border-gray-800 rounded-lg">
                   <ImagePlus size={32} className="opacity-50" />
-                  <span>还没有垫图，点击下方按钮上传</span>
+                  <span>还没有参考图，点击下方按钮上传</span>
                 </div>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
@@ -1145,7 +1145,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                                 setRefSource(next.source ?? (next.images.length ? 'chapter' : 'none'));
                               }
                             } catch (err: any) {
-                              setErrorMsg(`删除垫图失败: ${err.message}`);
+                              setErrorMsg(`删除参考图失败: ${err.message}`);
                             }
                           }}
                           className="absolute top-1.5 right-1.5 p-1 rounded-md bg-red-600 hover:bg-red-500 text-white shadow-lg transition-colors"
@@ -1162,10 +1162,10 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             <div className="px-5 py-3 border-t border-gray-800 flex items-center justify-between gap-2">
               <span className="text-xs text-gray-500">
                 {refSource === 'chapter'
-                  ? '本话自定义垫图（覆盖全局）'
+                  ? '本集自定义参考图（覆盖全局）'
                   : refSource === 'story' || refSource === 'asset_group'
-                    ? '当前显示全局垫图'
-                    : '尚未上传垫图'}
+                    ? '当前显示全局参考图'
+                    : '尚未上传参考图'}
               </span>
               <button
                 onClick={() => refFileRef.current?.click()}
@@ -1176,11 +1176,11 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                 title={
                   refImages.length >= refMax && refSource === 'chapter'
                     ? `已达上限 ${refMax} 张`
-                    : '上传一张垫图'
+                    : '上传一张参考图'
                 }
               >
                 {refUploading ? <Loader2 size={13} className="animate-spin" /> : <ImagePlus size={13} />}
-                {(refSource === 'story' || refSource === 'asset_group') && refImages.length > 0 ? '上传本话垫图（覆盖全局）' : '添加垫图'}
+                {(refSource === 'story' || refSource === 'asset_group') && refImages.length > 0 ? '上传本集参考图（覆盖全局）' : '添加参考图'}
               </button>
             </div>
           </div>

@@ -162,7 +162,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
               placeholder="sk-..."
               className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-violet-500"
             />
-            <p className="text-xs text-gray-500">用于 AI 对话、生成小说正文和生成分镜。</p>
+            <p className="text-xs text-gray-500">用于星络 Brief、生成短剧正文和生成分镜。</p>
           </div>
 
           <div className="space-y-2">
@@ -185,7 +185,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
               placeholder="填入图片生成 API Key"
               className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-amber-500"
             />
-            <p className="text-xs text-gray-500">用于生成漫画图片和重新生成单张图片。</p>
+            <p className="text-xs text-gray-500">用于生成画面和重新生成单张画面。</p>
           </div>
         </div>
 
@@ -373,7 +373,7 @@ function App() {
         setChapters(nextChapters);
         setCurrentIdx(nextChapters.length - 1, nextChapters);
       } catch (err: any) {
-        alert(`创建下一话失败: ${err.message}`);
+        alert(`创建下一集失败: ${err.message}`);
       } finally {
         setCreatingChapter(false);
       }
@@ -382,7 +382,7 @@ function App() {
 
   const handleDelete = async () => {
     if (!currentChapter) return;
-    if (!confirm(`确定删除第 ${currentChapter.chapter_number} 话？对话和漫画都将被删除。`)) return;
+    if (!confirm(`确定删除第 ${currentChapter.chapter_number} 集？星络 Brief 和生成画面都将被删除。`)) return;
     try {
       await deleteChapter(currentChapter.id);
       const remaining = chapters.filter((c) => c.id !== currentChapter.id);
@@ -418,7 +418,7 @@ function App() {
       <div className="flex w-64 flex-col">
         <div className="flex h-11 items-center justify-between border-b border-gray-800 px-3">
           <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">目录</span>
-          <span className="text-[11px] text-gray-600">{chapters.length} 话</span>
+          <span className="text-[11px] text-gray-600">{chapters.length} 集</span>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
           {chapters.map((chapter, idx) => {
@@ -433,7 +433,7 @@ function App() {
                     : 'text-gray-400 hover:bg-gray-900 hover:text-gray-200 border border-transparent'
                 }`}
               >
-                <div className="text-xs font-medium">第 {chapter.chapter_number} 话</div>
+                <div className="text-xs font-medium">第 {chapter.chapter_number} 集</div>
                 <div className="mt-0.5 truncate text-[11px] text-gray-600">
                   {chapter.novel_content ? '已有正文' : chapter.messages.length ? '创作中' : '未开始'}
                 </div>
@@ -497,14 +497,14 @@ function App() {
           </button>
           <BookOpenText size={16} className="text-violet-400 shrink-0" />
           <span className="text-sm font-semibold tracking-wide truncate max-w-[120px] md:max-w-xs">
-            {story?.title ?? '小说漫画生成器'}
+            {story?.title ?? 'OPC-LoreVista'}
           </span>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-500 shrink-0">
           <ApiKeyButton onClick={() => setApiKeyModalOpen(true)} compact={isMobile} />
-          <span>第 {currentChapter?.chapter_number ?? '–'} 话</span>
+          <span>第 {currentChapter?.chapter_number ?? '–'} 集</span>
           {!isMobile && <span>·</span>}
-          {!isMobile && <span>共 {chapters.length} 话</span>}
+          {!isMobile && <span>共 {chapters.length} 集</span>}
         </div>
       </header>
       <ApiKeySettingsModal open={apiKeyModalOpen} onClose={() => setApiKeyModalOpen(false)} />
@@ -520,7 +520,7 @@ function App() {
                 : 'text-gray-500 hover:text-gray-300'}`}
           >
             <MessageSquare size={14} />
-            对话
+            星络 Brief
           </button>
           <button
             onClick={() => setMobileTab('manga')}
@@ -530,7 +530,7 @@ function App() {
                 : 'text-gray-500 hover:text-gray-300'}`}
           >
             <Image size={14} />
-            漫画
+            分镜生成
           </button>
         </div>
       )}
@@ -547,7 +547,7 @@ function App() {
                   : 'border-gray-800 bg-gray-900 text-gray-500 hover:text-gray-300'
               }`}
             >
-              第 {chapter.chapter_number} 话
+              第 {chapter.chapter_number} 集
             </button>
           ))}
         </div>
@@ -592,7 +592,7 @@ function App() {
                      disabled:cursor-not-allowed transition-colors"
         >
           <ChevronLeft size={16} />
-          {!isMobile && '上一话'}
+          {!isMobile && '上一集'}
         </button>
 
         <button
@@ -601,8 +601,8 @@ function App() {
           className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-lg
                      bg-red-900/50 hover:bg-red-800 text-red-300 disabled:opacity-30
                      disabled:cursor-not-allowed transition-colors"
-          title="删除当前话"
-          aria-label="删除当前话"
+          title="删除当前集"
+          aria-label="删除当前集"
         >
           <Trash2 size={14} />
         </button>
@@ -612,7 +612,7 @@ function App() {
             <button
               key={chapter.id}
               onClick={() => setCurrentIdx(i)}
-              aria-label={`跳转到第 ${chapter.chapter_number} 话`}
+              aria-label={`跳转到第 ${chapter.chapter_number} 集`}
               className={`w-2 h-2 rounded-full transition-colors ${
                 i === currentIdx ? 'bg-violet-500' : 'bg-gray-700 hover:bg-gray-600'
               }`}
@@ -630,11 +630,11 @@ function App() {
           {currentIdx === chapters.length - 1 ? (
             <>
               <Plus size={16} />
-              {creatingChapter ? '新建…' : (isMobile ? '新建' : '下一话（新建）')}
+              {creatingChapter ? '新建…' : (isMobile ? '新建' : '下一集（新建）')}
             </>
           ) : (
             <>
-              {!isMobile && '下一话'}
+              {!isMobile && '下一集'}
               <ChevronRight size={16} />
             </>
           )}

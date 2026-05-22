@@ -154,7 +154,7 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
     if (!chapter || importing || isChatLocked) return;
     const text = importText.trim();
     if (!text) {
-      setImportError('请输入小说内容');
+      setImportError('请输入项目内容');
       return;
     }
     if (text.length > MAX_IMPORT_CHARS) {
@@ -180,7 +180,7 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
       {/* Header with mode tabs */}
       <div className="px-5 py-3 border-b border-gray-800 flex items-center justify-between gap-3">
         <h2 className="text-sm font-semibold text-gray-200 tracking-wide uppercase shrink-0">
-          第 {chapter?.chapter_number ?? '–'} 话
+          第 {chapter?.chapter_number ?? '–'} 集
         </h2>
         <div className="flex items-center gap-1 bg-gray-900 rounded-lg p-1 border border-gray-800">
           <button
@@ -193,7 +193,7 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
             }`}
           >
             <MessageSquare size={12} />
-            AI 对话
+            星络 Brief
           </button>
           <button
             onClick={() => setMode('import')}
@@ -205,7 +205,7 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
             }`}
           >
             <FileText size={12} />
-            粘贴小说
+            粘贴正文
           </button>
         </div>
       </div>
@@ -214,10 +214,10 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
         <div className="flex-1 flex flex-col min-h-0">
           <div className="px-5 pt-4 pb-2 text-xs text-gray-500 leading-relaxed shrink-0">
             {isImportLocked
-              ? '本话已导入小说，不能再使用 AI 对话。右侧「漫画」面板可继续生成分镜与漫画图片。'
+              ? '本集已导入正文，不能再使用星络 Brief。右侧「分镜生成」面板可继续生成分镜与画面。'
               : isChatLocked
-                ? '本话已使用 AI 对话创作，不能再粘贴小说。请新建下一话后导入已有小说。'
-                : '将你已有的小说内容粘贴到下方，保存后本话将锁定为「粘贴小说」模式。'}
+                ? '本集已使用星络 Brief 创作，不能再粘贴正文。请新建下一集后导入已有正文。'
+                : '将你已有的项目内容粘贴到下方，保存后本集将锁定为「粘贴正文」模式。'}
           </div>
           <div className="flex-1 px-5 pb-3 min-h-0">
             <textarea
@@ -227,7 +227,7 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
                 if (importError) setImportError('');
               }}
               disabled={isImportLocked || isChatLocked}
-              placeholder={`粘贴小说全文…（最长 ${MAX_IMPORT_CHARS} 字）`}
+              placeholder={`粘贴项目正文…（最长 ${MAX_IMPORT_CHARS} 字）`}
               className="w-full h-full bg-gray-900 border border-gray-800 rounded-lg p-3 text-sm text-gray-200
                          placeholder-gray-600 resize-none outline-none focus:border-violet-600 transition-colors disabled:opacity-70
                          font-mono leading-relaxed"
@@ -246,7 +246,7 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
                          disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
             >
               <Save size={13} />
-              {isImportLocked ? '已导入' : importing ? '保存中…' : '保存小说'}
+              {isImportLocked ? '已导入' : importing ? '保存中…' : '保存正文'}
             </button>
           </div>
         </div>
@@ -256,7 +256,7 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
           <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
             {messages.length === 0 && !streaming && (
               <div className="flex items-center justify-center h-full text-gray-600 text-sm">
-                开始和 AI 讨论你的小说创意吧…
+                开始和 AI 讨论你的项目 Brief 吧…
               </div>
             )}
             {messages.map((msg, i) => (
@@ -301,7 +301,7 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
                          transition-colors"
                 >
                   <Image size={14} />
-                  查看漫画 / 生成分镜
+                  查看分镜生成
                 </button>
               </div>
             )}
@@ -319,7 +319,7 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
                   autoResize(e.target);
                 }}
                 onKeyDown={handleKeyDown}
-                placeholder="描述你的小说想法…"
+                placeholder="描述你的项目 Brief…"
                 disabled={isImportLocked}
                 rows={1}
                 className="flex-1 bg-transparent text-sm text-gray-200 placeholder-gray-600 resize-none outline-none disabled:opacity-50"

@@ -33,7 +33,7 @@ export const genStore = {
       active: true,
       current: 0,
       total,
-      statusMsg: '正在生成漫画…',
+      statusMsg: '正在生成画面…',
       images: [],
       errorMsg: '',
       lastEventAt: Date.now(),
