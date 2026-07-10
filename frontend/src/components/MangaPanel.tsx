@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronUp, ChevronDown, Download, ImageIcon, Loader2, Sparkles, Pencil, RefreshCw, Check, X, ImagePlus, Trash2, Square } from 'lucide-react';
+import { ChevronUp, ChevronDown, Download, ImageIcon, Loader2, Sparkles, Pencil, RefreshCw, Check, X, ImagePlus, Trash2, Square, SkipForward } from 'lucide-react';
 import {
   generateMangaStream,
   generateScenes,
   refineScenes,
   refineSingleScene,
+  skipCurrentImage,
+  cancelMangaGeneration,
   getScenes,
   updateScenes,
   regenerateImage,
+  uploadMangaImage,
   getCharacters,
   saveCharacters,
   resetChapterCharacters,
@@ -56,6 +59,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const [images, setImages] = useState<ImageItem[]>([]);
   const [lightboxIdx, setLightboxIdx] = useState<number>(-1);
   const [errorMsg, setErrorMsg] = useState('');
+  const [skippedNumbers, setSkippedNumbers] = useState<Set<number>>(() => new Set());
   const [scenes, setScenes] = useState<string[]>([]);
   const [originalScenes, setOriginalScenes] = useState<string[]>([]);
   const [sceneRevisionHistory, setSceneRevisionHistory] = useState<SceneRevisionDraft[]>([]);
@@ -87,6 +91,8 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const [showColorMenu, setShowColorMenu] = useState(false);
   const colorMenuRef = useRef<HTMLDivElement>(null);
   const refFileRef = useRef<HTMLInputElement>(null);
+  const panelUploadInputRef = useRef<HTMLInputElement>(null);
+  const panelUploadNumberRef = useRef<number | null>(null);
   const lightboxRef = useRef<HTMLDivElement>(null);
   const chapterLoadRequestRef = useRef(0);
   const sceneAbortRef = useRef<AbortController | null>(null);
@@ -111,6 +117,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     setProgress({ current: 0, total: DEFAULT_IMAGE_COUNT });
     setStatusMsg('');
     setErrorMsg('');
+    setSkippedNumbers(new Set());
     setLightboxIdx(-1);
     setScenes([]);
     setExpandedScenes(new Set());
@@ -404,7 +411,51 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     }
   };
 
-  // Close color menu on outside click
+  // ── Close color menu on outside click ──
+  const handleUploadPanelClick = (imageNumber: number) => {
+    panelUploadNumberRef.current = imageNumber;
+    panelUploadInputRef.current?.click();
+  };
+
+  const handleUploadPanelFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    const imageNumber = panelUploadNumberRef.current;
+    panelUploadNumberRef.current = null;
+    if (!chapter || !file || !imageNumber) return;
+    if (!file.type.startsWith('image/')) {
+      setErrorMsg('请选择图片文件');
+      return;
+    }
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('读取图片失败'));
+        reader.readAsDataURL(file);
+      });
+      const prompt = scenes[imageNumber - 1] || '';
+      const result = await uploadMangaImage(chapter.id, imageNumber, base64, prompt);
+      const newItem: ImageItem = {
+        image_number: result.image_number,
+        image_path: result.image_path,
+        prompt: result.prompt,
+      };
+      setImages((prev) => {
+        const updated = prev.length > 0 ? [...prev] : [...existingImages];
+        const idx = updated.findIndex((i) => i.image_number === imageNumber);
+        if (idx >= 0) updated[idx] = newItem;
+        else updated.push(newItem);
+        return updated.sort((a, b) => a.image_number - b.image_number);
+      });
+      setImageVersions((prev) => ({ ...prev, [imageNumber]: Date.now() }));
+      setErrorMsg('');
+      onChapterRefresh?.(chapter.id);
+    } catch (err: any) {
+      setErrorMsg(`上传第 ${imageNumber} 张失败: ${err.message}`);
+    }
+  };
+
   useEffect(() => {
     if (!showColorMenu) return;
     const handler = (e: MouseEvent) => {
@@ -463,32 +514,56 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             image_path: event.data.image_path,
             prompt: event.data.prompt,
           });
-          if (event.data.image_number >= targetTotal) {
-            mangaAbortRef.current.delete(targetId);
-            genStore.finish(targetId);
-            onChapterRefresh?.(targetId);
-            setTimeout(() => genStore.clear(targetId), 800);
-          }
+          setSkippedNumbers((prev) => {
+            const next = new Set(prev);
+            next.delete(event.data.image_number);
+            return next;
+          });
+          // Terminal state is only set on 'done' / 'error' so skip/cancel/reconnect stay consistent.
+          break;
+        case 'skipped':
+          genStore.markSkipped(targetId, event.data.image_number);
+          setSkippedNumbers((prev) => new Set(prev).add(event.data.image_number));
           break;
         case 'done':
           mangaAbortRef.current.delete(targetId);
-          genStore.finish(targetId);
+          {
+            const doneState = genStore.get(targetId);
+            if (doneState?.images.length) {
+              setImages(doneState.images);
+            }
+            const cancelled = !!event.data?.cancelled;
+            genStore.finish(targetId, cancelled ? '已中止生成' : undefined);
+          }
           onChapterRefresh?.(targetId);
           setTimeout(() => genStore.clear(targetId), 800);
           break;
         case 'error':
           mangaAbortRef.current.delete(targetId);
+          {
+            const errorState = genStore.get(targetId);
+            if (errorState?.images.length) {
+              setImages(errorState.images);
+            }
+          }
           genStore.finish(targetId, event.data.error || '未知错误');
+          onChapterRefresh?.(targetId);
           break;
       }
     });
     mangaAbortRef.current.set(targetId, controller);
   };
 
-  const handleAbortManga = () => {
+  const handleAbortManga = async () => {
     if (!chapter) return;
     const targetId = chapter.id;
     const state = genStore.get(targetId);
+    // Ask server to stop first so Image2 is not left running after the UI disconnects.
+    try {
+      await cancelMangaGeneration(targetId);
+    } catch (err: any) {
+      console.warn('cancel manga generation failed:', err?.message || err);
+    }
     mangaAbortRef.current.get(targetId)?.abort();
     mangaAbortRef.current.delete(targetId);
     if (state?.images.length) {
@@ -499,6 +574,24 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   };
 
   // ── Lightbox keyboard/scroll navigation ──
+  const handleSkipCurrentImage = async () => {
+    if (!chapter || !liveGen?.active || !liveGen.current) return;
+    const targetId = chapter.id;
+    const imageNumber = liveGen.current;
+    genStore.patch(targetId, {
+      skipPendingNumber: imageNumber,
+      statusMsg: `Skipping image ${imageNumber}...`,
+    });
+    try {
+      await skipCurrentImage(targetId);
+    } catch (err: any) {
+      genStore.patch(targetId, {
+        skipPendingNumber: null,
+        errorMsg: err.message || 'Skip failed',
+      });
+    }
+  };
+
   const handleLightboxNav = useCallback((dir: 'prev' | 'next') => {
     setLightboxIdx((cur) => {
       if (dir === 'prev' && cur > 0) return cur - 1;
@@ -548,12 +641,21 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     : progress;
   const liveStatusMsg = isLiveGenerating ? liveGen!.statusMsg : statusMsg;
   const liveErrorMsg = liveGen?.errorMsg || errorMsg;
+  const liveSkippedNumbers = new Set([...(liveGen?.skippedNumbers ?? []), ...skippedNumbers]);
+  const skipPendingNumber = liveGen?.skipPendingNumber ?? null;
   const hasImages = displayImages.length > 0;
   const canChangeImageCount = !generating && scenes.length === 0 && !hasImages;
   const activeImageCount = liveProgress.total || imageCount;
 
   return (
     <div className="flex flex-col h-full bg-gray-950">
+      <input
+        ref={panelUploadInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleUploadPanelFile}
+      />
       {/* Header */}
       <div className="px-3 md:px-5 py-3 border-b border-gray-800 flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-gray-200 tracking-wide uppercase shrink-0 hidden md:block">
@@ -773,6 +875,17 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
               )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={handleSkipCurrentImage}
+                disabled={!isLiveGenerating || !liveProgress.current || skipPendingNumber === liveProgress.current}
+                className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md
+                           bg-amber-900/50 hover:bg-amber-800 text-amber-200 border border-amber-700 transition-colors
+                           disabled:opacity-40 disabled:cursor-not-allowed"
+                title="跳过当前图片，继续生成下一张"
+              >
+                {skipPendingNumber === liveProgress.current ? <Loader2 size={10} className="animate-spin" /> : <SkipForward size={10} />}
+                跳过此图
+              </button>
               <button
                 onClick={handleAbortManga}
                 className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-md
@@ -1000,6 +1113,8 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             const sceneIdx = image_number - 1;
             const isEditing = editingIdx === sceneIdx;
             const isRegenerating = regenIdx === image_number;
+            const isCurrentGenerating = generating && liveProgress.current === image_number && !img;
+            const isSkipped = liveSkippedNumbers.has(image_number) && !img;
             return (
               <div key={image_number} className="group">
                 {img ? (
@@ -1052,9 +1167,49 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                   <div className="absolute top-3 left-3 px-2 py-0.5 bg-black/50 rounded text-[10px] text-gray-400 font-mono">
                     {image_number}/{imageCount}
                   </div>
-                  <div className="flex flex-col items-center gap-2 text-gray-600">
-                    {generating ? <Loader2 size={24} className="animate-spin" /> : <ImageIcon size={28} strokeWidth={1.5} />}
-                    <span className="text-xs">{generating ? '等待生成…' : '未生成'}</span>
+                  <div className={`flex flex-col items-center gap-2 ${isSkipped ? 'text-amber-400' : 'text-gray-600'}`}>
+                    {isCurrentGenerating ? (
+                      <Loader2 size={24} className="animate-spin" />
+                    ) : isSkipped ? (
+                      <SkipForward size={24} />
+                    ) : generating ? (
+                      <Loader2 size={24} className="animate-spin opacity-40" />
+                    ) : (
+                      <ImageIcon size={28} strokeWidth={1.5} />
+                    )}
+                    <span className="text-xs">
+                      {isCurrentGenerating
+                        ? '正在生成...'
+                        : isSkipped
+                          ? '已跳过，可稍后重新生成'
+                          : generating
+                            ? '等待生成...'
+                            : '未生成'}
+                    </span>
+                    {isCurrentGenerating && (
+                      <button
+                        onClick={handleSkipCurrentImage}
+                        disabled={skipPendingNumber === image_number}
+                        className="mt-1 flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-md
+                                   bg-amber-600 hover:bg-amber-500 text-gray-950 transition-colors
+                                   disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        {skipPendingNumber === image_number ? <Loader2 size={12} className="animate-spin" /> : <SkipForward size={12} />}
+                        跳过此图
+                      </button>
+                    )}
+                    {!generating && !isCurrentGenerating && (
+                      <button
+                        type="button"
+                        onClick={() => handleUploadPanelClick(image_number)}
+                        className="mt-1 flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-md
+                                   bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors border border-gray-700"
+                        title="上传已经生成好的图片到这一格"
+                      >
+                        <ImagePlus size={12} />
+                        上传已有图
+                      </button>
+                    )}
                   </div>
                 </div>
                 )}

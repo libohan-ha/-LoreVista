@@ -21,6 +21,7 @@ frontend/node_modules/
 
 # ─── Generated outputs (large images/data) ───
 backend/manga_outputs/
+logs/
 test_novel_output.md
 test_ref_C.png
 

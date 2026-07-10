@@ -13,6 +13,8 @@ export interface GenState {
   total: number;
   statusMsg: string;
   images: GenImage[];
+  skippedNumbers: number[];
+  skipPendingNumber: number | null;
   errorMsg: string;
   lastEventAt: number;    // epoch ms of most recent SSE event for stall detection
 }
@@ -35,6 +37,8 @@ export const genStore = {
       total,
       statusMsg: '正在生成漫画…',
       images: [],
+      skippedNumbers: [],
+      skipPendingNumber: null,
       errorMsg: '',
       lastEventAt: Date.now(),
     });
@@ -54,6 +58,21 @@ export const genStore = {
       .concat(img)
       .sort((a, b) => a.image_number - b.image_number);
     states.set(chapterId, { ...cur, images, lastEventAt: Date.now() });
+    emit();
+  },
+  markSkipped(chapterId: number, imageNumber: number) {
+    const cur = states.get(chapterId);
+    if (!cur) return;
+    const skippedNumbers = cur.skippedNumbers.includes(imageNumber)
+      ? cur.skippedNumbers
+      : [...cur.skippedNumbers, imageNumber].sort((a, b) => a - b);
+    states.set(chapterId, {
+      ...cur,
+      skippedNumbers,
+      skipPendingNumber: cur.skipPendingNumber === imageNumber ? null : cur.skipPendingNumber,
+      statusMsg: `Skipped image ${imageNumber}; continuing...`,
+      lastEventAt: Date.now(),
+    });
     emit();
   },
   finish(chapterId: number, errorMsg?: string) {

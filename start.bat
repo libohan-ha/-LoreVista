@@ -26,7 +26,7 @@ start "" "http://localhost:5173"
 echo.
 echo ==========================================
 echo    Running!
-echo    Backend : http://localhost:8000
+echo    Backend : http://localhost:8010
 echo    Frontend: http://localhost:5173
 echo ==========================================
 echo.

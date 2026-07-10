@@ -77,6 +77,8 @@ cd backend
 python main.py
 ```
 
+后端默认监听 `http://127.0.0.1:8010`（与前端 Vite 代理一致；也可在 `backend/.env` 中改 `PORT`）。
+
 再打开另一个终端，启动前端：
 
 ```bash

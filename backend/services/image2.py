@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from PIL import Image
 
 logger = logging.getLogger("image2")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
+logger.setLevel(logging.INFO)
 
 load_dotenv()
 
@@ -28,12 +28,30 @@ def normalize_image_api_base_url(base_url: str | None) -> str:
 IMAGE_API_BASE_URL = normalize_image_api_base_url(os.getenv("IMAGE_API_BASE_URL"))
 IMAGE_API_KEY = os.getenv("IMAGE_API_KEY", "")
 IMAGE_MODEL = "gpt-image-2"
-IMAGE_SIZE = "1024x1536"
+IMAGE_SIZE = os.getenv("IMAGE_SIZE", "1024x1536").strip() or "1024x1536"
+IMAGE_QUALITY = os.getenv("IMAGE_QUALITY", "low").strip().lower()
+IMAGE_RESPONSE_FORMAT = os.getenv("IMAGE_RESPONSE_FORMAT", "url").strip().lower()
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "manga_outputs"
 
 
-MAX_RETRIES = 3
+# Image generation POSTs are not idempotent: once the upstream server receives
+# the request it may charge and finish the image even if our client never gets
+# the response. Keep automatic retries disabled unless explicitly opted in.
+MAX_RETRIES = max(1, int(os.getenv("IMAGE_API_MAX_RETRIES", "1")))
 RETRY_DELAY = 5  # seconds
+IMAGE_DOWNLOAD_RETRIES = 3
+
+
+class ImageResponseLostError(RuntimeError):
+    """Raised when Image2 may have succeeded upstream but no image reached us."""
+
+
+def _response_lost_message(exc: Exception) -> str:
+    return (
+        "Image2 后台可能已经生成并扣费，但本地没有收到最终图片响应。"
+        "为避免重复扣费，应用已停止自动重试。请先到 Image2 后台确认，"
+        f"再决定是否重新生成。上游/网络错误: {exc}"
+    )
 
 
 def _image_auth_headers(api_key: str | None = None, json_content: bool = False) -> dict[str, str]:
@@ -45,6 +63,41 @@ def _image_auth_headers(api_key: str | None = None, json_content: bool = False) 
     if json_content:
         headers["Content-Type"] = "application/json"
     return headers
+
+
+def _image_response_format_payload() -> dict[str, str]:
+    if IMAGE_RESPONSE_FORMAT in {"url", "b64_json"}:
+        return {"response_format": IMAGE_RESPONSE_FORMAT}
+    return {}
+
+
+def _image_quality_payload() -> dict[str, str]:
+    if IMAGE_QUALITY in {"low", "medium", "high", "standard", "hd"}:
+        return {"quality": IMAGE_QUALITY}
+    return {}
+
+
+async def _download_image_url(url: str, progress_label: str) -> bytes:
+    last_err: Exception | None = None
+    timeout = httpx.Timeout(connect=30, read=180, write=30, pool=30)
+    for attempt in range(1, IMAGE_DOWNLOAD_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                img_resp = await client.get(url)
+                img_resp.raise_for_status()
+                return img_resp.content
+        except Exception as exc:
+            last_err = exc
+            logger.warning(
+                "[%s] Image URL download failed (attempt %s/%s): %s",
+                progress_label,
+                attempt,
+                IMAGE_DOWNLOAD_RETRIES,
+                exc,
+            )
+            if attempt < IMAGE_DOWNLOAD_RETRIES:
+                await asyncio.sleep(2 * attempt)
+    raise RuntimeError(f"Image URL download failed after {IMAGE_DOWNLOAD_RETRIES} attempts: {last_err}")
 
 
 def normalize_image_bytes(image_bytes: bytes) -> bytes:
@@ -153,9 +206,21 @@ async def generate_manga_image(
 
     last_err: Exception | None = None
     for attempt in range(1, MAX_RETRIES + 1):
+        heartbeat_task: asyncio.Task | None = None
         try:
             mode = f"edits({len(ref_blobs)}图垫图)" if ref_blobs else "generations"
             logger.info(f"[{progress_label}] 开始调用 Image2 API [{mode}]（尝试 {attempt}/{MAX_RETRIES}）")
+            logger.info(
+                "[%s] Image2 request config: mode=%s attempt=%s/%s size=%s quality=%s response_format=%s refs=%s",
+                progress_label,
+                mode,
+                attempt,
+                MAX_RETRIES,
+                IMAGE_SIZE,
+                IMAGE_QUALITY,
+                IMAGE_RESPONSE_FORMAT,
+                len(ref_blobs),
+            )
             t0 = time.time()
 
             async def _heartbeat(label: str, start_ts: float) -> None:
@@ -164,6 +229,7 @@ async def generate_manga_image(
                     while True:
                         await asyncio.sleep(30)
                         waited = int(time.time() - start_ts)
+                        logger.info("[%s] Still waiting for Image2 response after %ss", label, waited)
                         logger.info(f"[{label}] 等待中... 已等待 {waited}s（上游可能排队，继续等）")
                 except asyncio.CancelledError:
                     return
@@ -191,6 +257,8 @@ async def generate_manga_image(
                             "model": IMAGE_MODEL,
                             "prompt": full_prompt,
                             "size": IMAGE_SIZE,
+                            **_image_response_format_payload(),
+                            **_image_quality_payload(),
                         },
                         headers=_image_auth_headers(api_key),
                     )
@@ -202,6 +270,8 @@ async def generate_manga_image(
                             "model": IMAGE_MODEL,
                             "prompt": full_prompt,
                             "size": IMAGE_SIZE,
+                            **_image_response_format_payload(),
+                            **_image_quality_payload(),
                         },
                         headers=_image_auth_headers(api_key, json_content=True),
                     )
@@ -218,10 +288,7 @@ async def generate_manga_image(
                 logger.info(f"[{progress_label}] 收到 b64_json，大小 {len(image_bytes)} bytes")
             elif image_entry.get("url"):
                 logger.info(f"[{progress_label}] 收到 URL，正在下载...")
-                async with httpx.AsyncClient(timeout=120) as client:
-                    img_resp = await client.get(image_entry["url"])
-                    img_resp.raise_for_status()
-                    image_bytes = img_resp.content
+                image_bytes = await _download_image_url(image_entry["url"], progress_label)
                 logger.info(f"[{progress_label}] 下载完成，大小 {len(image_bytes)} bytes")
             else:
                 raise RuntimeError("No b64_json or url in image response")
@@ -239,15 +306,32 @@ async def generate_manga_image(
 
             return f"manga_outputs/chapter_{chapter_id}/{filename}"
 
+        except asyncio.CancelledError:
+            if heartbeat_task:
+                heartbeat_task.cancel()
+            logger.info(f"[{progress_label}] Image2 API call cancelled")
+            raise
+        except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ReadError, httpx.WriteError, httpx.ProtocolError) as e:
+            if heartbeat_task:
+                heartbeat_task.cancel()
+            logger.error(f"[{progress_label}] Image2 response was lost after the request may have been processed; not retrying: {e}")
+            raise ImageResponseLostError(_response_lost_message(e)) from e
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as e:
+            last_err = e
+            if heartbeat_task:
+                heartbeat_task.cancel()
+            logger.error(f"[{progress_label}] Failed to connect to Image2 before sending request (attempt {attempt}/{MAX_RETRIES}): {e}")
+            if attempt < MAX_RETRIES:
+                logger.info(f"[{progress_label}] Retrying connection in {RETRY_DELAY}s...")
+                await asyncio.sleep(RETRY_DELAY)
         except Exception as e:
             last_err = e
-            try:
+            if heartbeat_task:
                 heartbeat_task.cancel()
-            except Exception:
-                pass
-            logger.error(f"[{progress_label}] 尝试 {attempt} 失败: {e}")
-            if attempt < MAX_RETRIES:
-                logger.info(f"[{progress_label}] {RETRY_DELAY}秒后重试...")
-                await asyncio.sleep(RETRY_DELAY)
+            logger.error(f"[{progress_label}] Image2 request failed; not retrying non-idempotent generation request: {e}")
+            raise RuntimeError(
+                "Image2 生图请求失败。为避免重复扣费，应用没有自动重试。"
+                f"错误: {e}"
+            ) from e
 
-    raise RuntimeError(f"第{image_number}张图片生成失败（已重试{MAX_RETRIES}次）: {last_err}")
+    raise RuntimeError(f"第{image_number}张图片生成失败（已尝试{MAX_RETRIES}次）: {last_err}")
