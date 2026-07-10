@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -37,9 +38,22 @@ from services.image2 import generate_manga_image
 
 load_dotenv()
 
+LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_DIR / "backend.log", encoding="utf-8"),
+    ],
+    force=True,
+)
+
 logger = logging.getLogger("main")
 ACTIVE_MANGA_GENERATIONS: set[int] = set()
 MANGA_GENERATION_JOBS: dict[int, "MangaGenerationJob"] = {}
+_MANGA_JOB_LOCK = asyncio.Lock()
 
 app = FastAPI(title="Novel & Manga Generator")
 
@@ -61,6 +75,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _request_logger(request: Request, call_next):
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.exception("HTTP %s %s failed after %.1fms", request.method, request.url.path, elapsed_ms)
+        raise
+    elapsed_ms = (time.perf_counter() - start) * 1000
+    logger.info("HTTP %s %s -> %s %.1fms", request.method, request.url.path, response.status_code, elapsed_ms)
+    return response
 
 
 @app.exception_handler(MissingApiKeyError)
@@ -271,19 +299,8 @@ def _decode_png_upload(b64: str) -> bytes:
 
 @app.on_event("startup")
 def on_startup():
+    logger.info("LoreVista backend startup: pid=%s host=%s port=%s", os.getpid(), os.getenv("HOST", "127.0.0.1"), os.getenv("PORT", "8010"))
     init_db()
-    # One-time: rename default stories
-    from database import SessionLocal
-    db = SessionLocal()
-    try:
-        for s in db.query(Story).filter(Story.title.in_(["我的第一个故事", "未命名故事"])).all():
-            if s.chapters and any(ch.messages for ch in s.chapters):
-                s.title = "转生成为暗恋公主的女仆故事"
-                s.description = "百合女仆与公主的奇幻冒险"
-            # else: leave as-is for empty stories
-        db.commit()
-    finally:
-        db.close()
 
 
 # ─── Story CRUD ─────────────────────────────────────────────
@@ -476,17 +493,7 @@ async def chat(chapter_id: int, body: ChatMessageIn, request: Request, db: Sessi
     db.add(user_msg)
     db.commit()
 
-    # Build message history including all previous chapters in same story
-    all_chapters = (
-        db.query(Chapter)
-        .filter(Chapter.story_id == chapter.story_id, Chapter.chapter_number <= chapter.chapter_number)
-        .order_by(Chapter.chapter_number)
-        .all()
-    )
-    history = []
-    for ch in all_chapters:
-        for m in ch.messages:
-            history.append({"role": m.role, "content": m.content})
+    history = _story_chat_history_up_to(chapter, db)
 
     collected: list[str] = []
 
@@ -511,6 +518,11 @@ async def chat(chapter_id: int, body: ChatMessageIn, request: Request, db: Sessi
             full_content = "".join(collected)
             assistant_msg = ChatMessage(chapter_id=chapter_id, role="assistant", content=full_content)
             db.add(assistant_msg)
+            # Keep novel_content roughly in sync for chapter list / export when AI replies with long text.
+            if full_content.strip() and len(full_content.strip()) >= 500:
+                ch = db.get(Chapter, chapter_id)
+                if ch:
+                    ch.novel_content = full_content
             db.commit()
             yield {"event": "done", "data": json.dumps({"content": full_content}, ensure_ascii=False)}
         except asyncio.CancelledError:
@@ -518,17 +530,30 @@ async def chat(chapter_id: int, body: ChatMessageIn, request: Request, db: Sessi
             save_interrupted_assistant()
             raise
         except Exception as e:
+            # Keep the user message so the conversation history matches what the UI already shows.
             db.rollback()
-            persisted_user_msg = db.get(ChatMessage, user_msg.id)
-            if persisted_user_msg:
-                db.delete(persisted_user_msg)
-                db.commit()
+            logger.exception("Chat stream failed for chapter %s", chapter_id)
             yield {"event": "error", "data": json.dumps({"error": str(e)}, ensure_ascii=False)}
 
     return EventSourceResponse(event_generator())
 
 
 # ─── Generate Novel ─────────────────────────────────────────
+
+def _story_chat_history_up_to(chapter: Chapter, db: Session) -> list[dict]:
+    """Build chat history for this chapter and all earlier chapters in the same story."""
+    all_chapters = (
+        db.query(Chapter)
+        .filter(Chapter.story_id == chapter.story_id, Chapter.chapter_number <= chapter.chapter_number)
+        .order_by(Chapter.chapter_number)
+        .all()
+    )
+    history: list[dict] = []
+    for ch in all_chapters:
+        for m in ch.messages:
+            history.append({"role": m.role, "content": m.content})
+    return history
+
 
 @app.post("/api/chapters/{chapter_id}/generate-novel", response_model=ChapterOut)
 async def generate_novel_endpoint(chapter_id: int, request: Request, db: Session = Depends(get_db)):
@@ -538,7 +563,8 @@ async def generate_novel_endpoint(chapter_id: int, request: Request, db: Session
     if chapter.content_source == "import":
         raise HTTPException(409, "This chapter was imported from existing novel text and cannot generate AI novel text")
 
-    history = [{"role": m.role, "content": m.content} for m in chapter.messages]
+    # Match /chat: include prior chapters so multi-chapter stories keep continuity.
+    history = _story_chat_history_up_to(chapter, db)
     if not history:
         raise HTTPException(400, "No chat history to generate novel from")
 
@@ -1823,6 +1849,11 @@ class MangaGenerationJob:
         self.events: list[dict[str, str]] = []
         self.subscribers: set[asyncio.Queue] = set()
         self.task: asyncio.Task | None = None
+        self.current_image_number: int | None = None
+        self.current_image_task: asyncio.Task | None = None
+        self.skip_requested_number: int | None = None
+        self.skipped_numbers: set[int] = set()
+        self.cancel_requested = False
 
     async def publish(self, event: str, data: dict):
         payload = {"event": event, "data": json.dumps(data, ensure_ascii=False)}
@@ -1849,6 +1880,12 @@ async def _run_manga_generation_job(job: MangaGenerationJob, chapter_id: int, im
         }
 
         for i, scene_prompt in enumerate(scenes, start=1):
+            if job.cancel_requested:
+                await job.publish("done", {"message": "已中止生成", "cancelled": True})
+                return
+
+            job.current_image_number = i
+            job.skip_requested_number = None
             if i in existing_images:
                 img = existing_images[i]
                 await job.publish("image", {
@@ -1861,20 +1898,47 @@ async def _run_manga_generation_job(job: MangaGenerationJob, chapter_id: int, im
 
             await job.publish("progress", {"current": i, "total": image_count, "prompt": scene_prompt})
 
+            image_task: asyncio.Task | None = None
             try:
                 ref_imgs = _effective_ref_image_paths(chapter_id, db)
-                image_path = await generate_manga_image(
-                    scene_prompt,
-                    chapter_id,
-                    i,
-                    all_scenes=scenes,
-                    character_profiles=_load_characters(chapter_id, db),
-                    ref_image_paths=[str(p) for p in ref_imgs] if ref_imgs else None,
-                    color_mode=_load_color_mode(chapter_id, db),
-                    api_key=api_key,
+                image_task = asyncio.create_task(
+                    generate_manga_image(
+                        scene_prompt,
+                        chapter_id,
+                        i,
+                        all_scenes=scenes,
+                        character_profiles=_load_characters(chapter_id, db),
+                        ref_image_paths=[str(p) for p in ref_imgs] if ref_imgs else None,
+                        color_mode=_load_color_mode(chapter_id, db),
+                        api_key=api_key,
+                    )
                 )
+                job.current_image_task = image_task
+                image_path = await image_task
+            except asyncio.CancelledError:
+                if job.skip_requested_number == i and not job.cancel_requested:
+                    job.skipped_numbers.add(i)
+                    await job.publish("skipped", {
+                        "image_number": i,
+                        "total": image_count,
+                        "prompt": scene_prompt,
+                        "message": f"Skipped image {i}",
+                    })
+                    continue
+                if job.cancel_requested:
+                    await job.publish("done", {"message": "已中止生成", "cancelled": True})
+                    return
+                raise
             except Exception as img_err:
                 await job.publish("error", {"error": f"第 {i} 张生成失败: {img_err}"})
+                return
+            finally:
+                if job.current_image_task is image_task:
+                    job.current_image_task = None
+                    job.skip_requested_number = None
+
+            if job.cancel_requested:
+                await job.publish("done", {"message": "已中止生成", "cancelled": True})
                 return
 
             manga = MangaImage(
@@ -1895,14 +1959,28 @@ async def _run_manga_generation_job(job: MangaGenerationJob, chapter_id: int, im
 
         await job.publish("done", {"message": "漫画生成完成！"})
     except asyncio.CancelledError:
+        if job.cancel_requested:
+            with contextlib.suppress(Exception):
+                await job.publish("done", {"message": "已中止生成", "cancelled": True})
+            return
         raise
     except Exception as exc:
         logger.exception("Manga generation job failed for chapter %s", chapter_id)
         await job.publish("error", {"error": str(exc)})
     finally:
+        job.current_image_number = None
+        job.current_image_task = None
+        job.skip_requested_number = None
         db.close()
         job.active = False
         ACTIVE_MANGA_GENERATIONS.discard(chapter_id)
+        # Drop finished jobs after a short grace period so reconnect can still read events.
+        async def _cleanup_job() -> None:
+            await asyncio.sleep(120)
+            current = MANGA_GENERATION_JOBS.get(chapter_id)
+            if current is job and not job.active:
+                MANGA_GENERATION_JOBS.pop(chapter_id, None)
+        asyncio.create_task(_cleanup_job())
 
 
 async def _stream_manga_generation_job(job: MangaGenerationJob):
@@ -1925,6 +2003,7 @@ async def _stream_manga_generation_job(job: MangaGenerationJob):
 
 @app.post("/api/chapters/{chapter_id}/generate-manga-stream")
 async def generate_manga_stream(chapter_id: int, request: Request, db: Session = Depends(get_db)):
+    logger.info("Generate manga stream requested: chapter_id=%s", chapter_id)
     chapter = db.get(Chapter, chapter_id)
     if not chapter:
         raise HTTPException(404, "Chapter not found")
@@ -1936,22 +2015,61 @@ async def generate_manga_stream(chapter_id: int, request: Request, db: Session =
     if len(scenes) != image_count:
         raise HTTPException(400, f"Expected {image_count} scenes, found {len(scenes)}")
 
-    job = MANGA_GENERATION_JOBS.get(chapter_id)
-    if not job or not job.active:
-        ACTIVE_MANGA_GENERATIONS.add(chapter_id)
-        job = MangaGenerationJob(chapter_id, image_count)
-        MANGA_GENERATION_JOBS[chapter_id] = job
-        job.task = asyncio.create_task(
-            _run_manga_generation_job(
-                job,
-                chapter_id,
-                image_count,
-                scenes,
-                _user_image_api_key(request),
+    async with _MANGA_JOB_LOCK:
+        job = MANGA_GENERATION_JOBS.get(chapter_id)
+        if not job or not job.active:
+            ACTIVE_MANGA_GENERATIONS.add(chapter_id)
+            job = MangaGenerationJob(chapter_id, image_count)
+            MANGA_GENERATION_JOBS[chapter_id] = job
+            job.task = asyncio.create_task(
+                _run_manga_generation_job(
+                    job,
+                    chapter_id,
+                    image_count,
+                    scenes,
+                    _user_image_api_key(request),
+                )
             )
-        )
 
     return EventSourceResponse(_stream_manga_generation_job(job), ping=10)
+
+
+@app.post("/api/chapters/{chapter_id}/skip-current-image")
+async def skip_current_manga_image(chapter_id: int):
+    job = MANGA_GENERATION_JOBS.get(chapter_id)
+    if not job or not job.active:
+        raise HTTPException(409, "No active manga generation job")
+
+    image_number = job.current_image_number
+    image_task = job.current_image_task
+    if image_number is None or image_task is None or image_task.done():
+        raise HTTPException(409, "No image is currently being generated")
+
+    if job.skip_requested_number == image_number:
+        return {"ok": True, "image_number": image_number, "message": "Skip already requested"}
+
+    job.skip_requested_number = image_number
+    await job.publish("status", {"message": f"Skipping image {image_number}..."})
+    image_task.cancel()
+    return {"ok": True, "image_number": image_number}
+
+
+@app.post("/api/chapters/{chapter_id}/cancel-manga-generation")
+async def cancel_manga_generation(chapter_id: int):
+    """Stop an in-flight manga generation job on the server (not just the SSE client)."""
+    job = MANGA_GENERATION_JOBS.get(chapter_id)
+    if not job or not job.active:
+        return {"ok": True, "message": "No active manga generation job"}
+
+    job.cancel_requested = True
+    await job.publish("status", {"message": "正在中止生成…"})
+    image_task = job.current_image_task
+    if image_task is not None and not image_task.done():
+        image_task.cancel()
+    # If the job is between images / idle, cancelling the outer task forces exit.
+    if job.task is not None and not job.task.done() and (image_task is None or image_task.done()):
+        job.task.cancel()
+    return {"ok": True, "message": "Cancel requested"}
 
 
 # ─── Regenerate single image ─────────────────────────────
@@ -1959,6 +2077,7 @@ async def generate_manga_stream(chapter_id: int, request: Request, db: Session =
 @app.post("/api/chapters/{chapter_id}/regenerate-image/{image_number}")
 async def regenerate_single_image(chapter_id: int, image_number: int, body: dict, request: Request, db: Session = Depends(get_db)):
     """Regenerate a single panel image with an updated prompt."""
+    logger.info("Regenerate manga image requested: chapter_id=%s image_number=%s", chapter_id, image_number)
     chapter = db.get(Chapter, chapter_id)
     if not chapter:
         raise HTTPException(404, "Chapter not found")
@@ -2026,11 +2145,63 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
     }
 
 
+@app.post("/api/chapters/{chapter_id}/images/{image_number}/upload", response_model=MangaImageOut)
+async def upload_manga_image(chapter_id: int, image_number: int, body: dict, db: Session = Depends(get_db)):
+    """Attach an already-generated image to a manga panel without calling Image2."""
+    chapter = db.get(Chapter, chapter_id)
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+    image_count = _load_image_count(chapter_id, db)
+    if image_number < 1 or image_number > image_count:
+        raise HTTPException(400, f"image_number must be 1-{image_count}")
+
+    img_bytes = _decode_png_upload(body.get("image", ""))
+    prompt = (body.get("prompt") or "").strip() or None
+    if prompt is None:
+        scenes = _parse_scenes_text(chapter.scenes_text)
+        if 0 <= image_number - 1 < len(scenes):
+            prompt = scenes[image_number - 1]
+
+    chapter_dir = _chapter_dir(chapter_id)
+    chapter_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"panel_{image_number:02d}_{uuid.uuid4().hex[:8]}.png"
+    filepath = chapter_dir / filename
+    _write_bytes_or_conflict(filepath, img_bytes, "manga image")
+    image_path = f"manga_outputs/chapter_{chapter_id}/{filename}"
+
+    old_img = db.query(MangaImage).filter(
+        MangaImage.chapter_id == chapter_id,
+        MangaImage.image_number == image_number,
+    ).first()
+    old_path = _backend_path(old_img.image_path) if old_img else None
+
+    if old_img:
+        manga = old_img
+        manga.image_path = image_path
+        manga.prompt = prompt
+    else:
+        manga = MangaImage(
+            chapter_id=chapter_id,
+            image_number=image_number,
+            image_path=image_path,
+            prompt=prompt,
+        )
+        db.add(manga)
+    db.commit()
+    db.refresh(manga)
+
+    if old_path and old_path.exists() and old_path != filepath.resolve():
+        with contextlib.suppress(HTTPException):
+            _unlink_file(old_path, "old manga image")
+
+    return manga
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "main:app",
         host=os.getenv("HOST", "127.0.0.1"),
-        port=int(os.getenv("PORT", "8000")),
+        port=int(os.getenv("PORT", "8010")),
         reload=os.getenv("RELOAD", "false").lower() == "true",
     )

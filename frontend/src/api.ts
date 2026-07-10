@@ -685,9 +685,42 @@ export async function regenerateImage(
 
 // ─── Generate Manga (SSE with progress) ─────────────────────
 
+export async function uploadMangaImage(
+  chapterId: number,
+  imageNumber: number,
+  base64: string,
+  prompt?: string,
+): Promise<{ id: number; image_number: number; image_path: string; prompt: string }> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/images/${imageNumber}/upload`, {
+    method: 'POST',
+    headers: apiHeaders(true),
+    body: JSON.stringify({ image: base64, prompt }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export interface MangaProgress {
-  type: 'status' | 'scenes' | 'progress' | 'image' | 'done' | 'error';
+  type: 'status' | 'scenes' | 'progress' | 'image' | 'skipped' | 'done' | 'error';
   data: any;
+}
+
+export async function skipCurrentImage(chapterId: number): Promise<{ ok: boolean; image_number: number }> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/skip-current-image`, {
+    method: 'POST',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function cancelMangaGeneration(chapterId: number): Promise<{ ok: boolean; message?: string }> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/cancel-manga-generation`, {
+    method: 'POST',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export function generateMangaStream(
