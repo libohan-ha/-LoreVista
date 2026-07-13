@@ -196,6 +196,11 @@ def _user_image_api_key(request: Request) -> str | None:
     return request.headers.get("x-image-api-key") or None
 
 
+def _user_image_provider(request: Request) -> str:
+    provider = (request.headers.get("x-image-provider") or "image2").strip().lower()
+    return provider if provider in {"image2", "newapi"} else "image2"
+
+
 def _character_profile_text(body: dict) -> str:
     raw = body.get("characters", "")
     if not isinstance(raw, str):
@@ -1897,7 +1902,14 @@ class MangaGenerationJob:
                 queue.put_nowait(payload)
 
 
-async def _run_manga_generation_job(job: MangaGenerationJob, chapter_id: int, image_count: int, scenes: list[str], api_key: str | None):
+async def _run_manga_generation_job(
+    job: MangaGenerationJob,
+    chapter_id: int,
+    image_count: int,
+    scenes: list[str],
+    api_key: str | None,
+    image_provider: str,
+):
     db = SessionLocal()
     try:
         await job.publish("scenes", {"scenes": scenes})
@@ -1932,7 +1944,7 @@ async def _run_manga_generation_job(job: MangaGenerationJob, chapter_id: int, im
 
             image_task: asyncio.Task | None = None
             try:
-                ref_imgs = _effective_ref_image_paths(chapter_id, db)
+                ref_imgs = [] if image_provider == "newapi" else _effective_ref_image_paths(chapter_id, db)
                 image_task = asyncio.create_task(
                     generate_manga_image(
                         scene_prompt,
@@ -1943,6 +1955,7 @@ async def _run_manga_generation_job(job: MangaGenerationJob, chapter_id: int, im
                         ref_image_paths=[str(p) for p in ref_imgs] if ref_imgs else None,
                         color_mode=_load_color_mode(chapter_id, db),
                         api_key=api_key,
+                        provider=image_provider,
                     )
                 )
                 job.current_image_task = image_task
@@ -2060,6 +2073,7 @@ async def generate_manga_stream(chapter_id: int, request: Request, db: Session =
                     image_count,
                     scenes,
                     _user_image_api_key(request),
+                    _user_image_provider(request),
                 )
             )
 
@@ -2135,8 +2149,10 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
     ).first()
     old_path = Path(__file__).resolve().parent / old_img.image_path if old_img else None
 
-    # Generate new image
-    ref_imgs = _effective_ref_image_paths(chapter_id, db)
+    # Generate new image. NewAPI does not support reference images, so keep
+    # uploaded assets but exclude them from this request.
+    image_provider = _user_image_provider(request)
+    ref_imgs = [] if image_provider == "newapi" else _effective_ref_image_paths(chapter_id, db)
     image_path = await generate_manga_image(
         prompt,
         chapter_id,
@@ -2146,6 +2162,7 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
         ref_image_paths=[str(p) for p in ref_imgs] if ref_imgs else None,
         color_mode=_load_color_mode(chapter_id, db),
         api_key=_user_image_api_key(request),
+        provider=image_provider,
     )
 
     if old_img:

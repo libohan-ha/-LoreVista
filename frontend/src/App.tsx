@@ -17,6 +17,8 @@ import {
   API_KEY_CHANGE_EVENT,
   DEEPSEEK_USAGE_URL,
   IMAGE2_CONSOLE_URL,
+  NEWAPI_SIGNUP_URL,
+  type ImageProvider,
 } from './api';
 
 type View = 'home' | 'editor';
@@ -83,7 +85,8 @@ function useIsMobile() {
 function useApiKeyConfigured() {
   const read = () => {
     const s = getApiKeySettings();
-    return { deepseek: !!s.deepseekApiKey, image: !!s.imageApiKey };
+    const activeImageKey = s.imageProvider === 'newapi' ? s.newapiApiKey : s.image2ApiKey;
+    return { deepseek: !!s.deepseekApiKey, image: !!activeImageKey, provider: s.imageProvider };
   };
   const [state, setState] = useState(read);
   useEffect(() => {
@@ -100,30 +103,36 @@ function useApiKeyConfigured() {
 
 function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [deepseekApiKey, setDeepseekApiKey] = useState('');
-  const [imageApiKey, setImageApiKey] = useState('');
+  const [imageProvider, setImageProvider] = useState<ImageProvider>('image2');
+  const [image2ApiKey, setImage2ApiKey] = useState('');
+  const [newapiApiKey, setNewapiApiKey] = useState('');
 
   useEffect(() => {
     if (!open) return;
     const settings = getApiKeySettings();
     setDeepseekApiKey(settings.deepseekApiKey);
-    setImageApiKey(settings.imageApiKey);
+    setImageProvider(settings.imageProvider);
+    setImage2ApiKey(settings.image2ApiKey);
+    setNewapiApiKey(settings.newapiApiKey);
   }, [open]);
 
   if (!open) return null;
 
   const handleSave = () => {
-    saveApiKeySettings({ deepseekApiKey, imageApiKey });
+    saveApiKeySettings({ deepseekApiKey, imageProvider, image2ApiKey, newapiApiKey });
     onClose();
   };
 
   const handleClear = () => {
-    if (!window.confirm('确定要清除已保存的两个 API Key 吗？')) return;
+    if (!window.confirm('确定要清除已保存的 API Key 吗？')) return;
     clearApiKeySettings();
     setDeepseekApiKey('');
-    setImageApiKey('');
+    setImageProvider('image2');
+    setImage2ApiKey('');
+    setNewapiApiKey('');
   };
 
-  const hasAny = !!(deepseekApiKey || imageApiKey);
+  const hasAny = !!(deepseekApiKey || image2ApiKey || newapiApiKey);
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
@@ -165,27 +174,50 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
             <p className="text-xs text-gray-500">用于 AI 对话、生成小说正文和生成分镜。</p>
           </div>
 
-          <div className="space-y-2">
-            <div className="flex items-center justify-between gap-3">
-              <label className="text-xs font-medium text-gray-300">Image2 API Key</label>
-              <a
-                href={IMAGE2_CONSOLE_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 text-xs text-amber-300 hover:text-amber-200"
+          <div className="space-y-3">
+            <label className="text-xs font-medium text-gray-300">图片生成服务</label>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => setImageProvider('newapi')}
+                className={`rounded-lg border p-3 text-left transition-colors ${imageProvider === 'newapi' ? 'border-emerald-500 bg-emerald-500/10' : 'border-gray-800 bg-gray-900 hover:border-gray-700'}`}
               >
-                充值链接
-                <ExternalLink size={12} />
-              </a>
+                <div className="text-sm font-medium text-gray-100">省钱生图</div>
+                <div className="mt-1 text-xs font-semibold text-emerald-300">1 分一张 · 不支持垫图</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setImageProvider('image2')}
+                className={`rounded-lg border p-3 text-left transition-colors ${imageProvider === 'image2' ? 'border-amber-500 bg-amber-500/10' : 'border-gray-800 bg-gray-900 hover:border-gray-700'}`}
+              >
+                <div className="text-sm font-medium text-gray-100">Image2</div>
+                <div className="mt-1 text-xs font-semibold text-amber-300">5 分一张 · 支持垫图</div>
+              </button>
             </div>
-            <input
-              type="password"
-              value={imageApiKey}
-              onChange={(e) => setImageApiKey(e.target.value)}
-              placeholder="填入图片生成 API Key"
-              className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-amber-500"
-            />
-            <p className="text-xs text-gray-500">用于生成漫画图片和重新生成单张图片。</p>
+
+            {imageProvider === 'newapi' ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <label className="text-xs font-medium text-gray-300">省钱生图 API Key</label>
+                  <a href={NEWAPI_SIGNUP_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-emerald-300 hover:text-emerald-200">
+                    注册 / 充值 <ExternalLink size={12} />
+                  </a>
+                </div>
+                <input type="password" value={newapiApiKey} onChange={(e) => setNewapiApiKey(e.target.value)} placeholder="填入省钱生图 API Key" className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-emerald-500" />
+                <p className="text-xs leading-relaxed text-gray-500">使用 vidu-image-gpt2。选择该服务时，已上传的垫图会保留，但生成请求会自动取消使用垫图。</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <label className="text-xs font-medium text-gray-300">Image2 API Key</label>
+                  <a href={IMAGE2_CONSOLE_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-amber-300 hover:text-amber-200">
+                    充值链接 <ExternalLink size={12} />
+                  </a>
+                </div>
+                <input type="password" value={image2ApiKey} onChange={(e) => setImage2ApiKey(e.target.value)} placeholder="填入 Image2 API Key" className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-amber-500" />
+                <p className="text-xs text-gray-500">支持单张和多张垫图，用于保持角色外貌一致性。</p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -212,16 +244,17 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
 }
 
 function ApiKeyButton({ onClick, compact = false }: { onClick: () => void; compact?: boolean }) {
-  const { deepseek, image } = useApiKeyConfigured();
+  const { deepseek, image, provider } = useApiKeyConfigured();
   const status: 'ok' | 'partial' | 'none' =
     deepseek && image ? 'ok' : deepseek || image ? 'partial' : 'none';
   const dotColor =
     status === 'ok' ? 'bg-emerald-400' : status === 'partial' ? 'bg-amber-400' : 'bg-rose-500';
+  const providerName = provider === 'newapi' ? '省钱生图' : 'Image2';
   const tipText =
     status === 'ok'
-      ? '已配置 DeepSeek + Image2 API Key'
+      ? `已配置 DeepSeek + ${providerName} API Key`
       : status === 'partial'
-      ? `仅配置了 ${deepseek ? 'DeepSeek' : 'Image2'} API Key`
+      ? `仅配置了 ${deepseek ? 'DeepSeek' : providerName} API Key`
       : '未配置 API Key — 点击设置';
   return (
     <button

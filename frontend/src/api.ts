@@ -1,32 +1,48 @@
 const BASE = '';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN as string | undefined;
 export const DEEPSEEK_USAGE_URL = 'https://platform.deepseek.com/usage';
-export const IMAGE2_CONSOLE_URL = 'https://api.duojie.games/console/token';
+export const IMAGE2_CONSOLE_URL = 'https://api.duojie.games/sign-up?aff=EYRW';
+export const NEWAPI_SIGNUP_URL = 'https://st.qinnaonao.com/sign-up?aff=iKGh';
+export type ImageProvider = 'image2' | 'newapi';
 
 export interface ApiKeySettings {
   deepseekApiKey: string;
-  imageApiKey: string;
+  imageProvider: ImageProvider;
+  image2ApiKey: string;
+  newapiApiKey: string;
 }
 
 // Stored in localStorage so multiple tabs share the same API key settings.
 const LS_DEEPSEEK_API_KEY = 'lorevista.deepseekApiKey';
-const LS_IMAGE_API_KEY = 'lorevista.imageApiKey';
+const LS_LEGACY_IMAGE_API_KEY = 'lorevista.imageApiKey';
+const LS_IMAGE_PROVIDER = 'lorevista.imageProvider';
+const LS_IMAGE2_API_KEY = 'lorevista.image2ApiKey';
+const LS_NEWAPI_API_KEY = 'lorevista.newapiApiKey';
 export const API_KEY_CHANGE_EVENT = 'lorevista:api-key-change';
 
 export function getApiKeySettings(): ApiKeySettings {
+  const imageProvider = localStorage.getItem(LS_IMAGE_PROVIDER) === 'newapi' ? 'newapi' : 'image2';
+  const legacyImageKey = localStorage.getItem(LS_LEGACY_IMAGE_API_KEY) || '';
   return {
     deepseekApiKey: localStorage.getItem(LS_DEEPSEEK_API_KEY) || '',
-    imageApiKey: localStorage.getItem(LS_IMAGE_API_KEY) || '',
+    imageProvider,
+    image2ApiKey: localStorage.getItem(LS_IMAGE2_API_KEY) || legacyImageKey,
+    newapiApiKey: localStorage.getItem(LS_NEWAPI_API_KEY) || '',
   };
 }
 
 export function saveApiKeySettings(settings: ApiKeySettings): void {
   const deepseek = settings.deepseekApiKey.trim();
-  const image = settings.imageApiKey.trim();
+  const image2 = settings.image2ApiKey.trim();
+  const newapi = settings.newapiApiKey.trim();
   if (deepseek) localStorage.setItem(LS_DEEPSEEK_API_KEY, deepseek);
   else localStorage.removeItem(LS_DEEPSEEK_API_KEY);
-  if (image) localStorage.setItem(LS_IMAGE_API_KEY, image);
-  else localStorage.removeItem(LS_IMAGE_API_KEY);
+  localStorage.setItem(LS_IMAGE_PROVIDER, settings.imageProvider);
+  if (image2) localStorage.setItem(LS_IMAGE2_API_KEY, image2);
+  else localStorage.removeItem(LS_IMAGE2_API_KEY);
+  if (newapi) localStorage.setItem(LS_NEWAPI_API_KEY, newapi);
+  else localStorage.removeItem(LS_NEWAPI_API_KEY);
+  localStorage.removeItem(LS_LEGACY_IMAGE_API_KEY);
   // Notify same-tab listeners. Other tabs receive the browser 'storage' event.
   try {
     window.dispatchEvent(new Event(API_KEY_CHANGE_EVENT));
@@ -36,16 +52,18 @@ export function saveApiKeySettings(settings: ApiKeySettings): void {
 }
 
 export function clearApiKeySettings(): void {
-  saveApiKeySettings({ deepseekApiKey: '', imageApiKey: '' });
+  saveApiKeySettings({ deepseekApiKey: '', imageProvider: 'image2', image2ApiKey: '', newapiApiKey: '' });
 }
 
 function apiHeaders(json = false): HeadersInit {
   const keys = getApiKeySettings();
+  const imageApiKey = keys.imageProvider === 'newapi' ? keys.newapiApiKey : keys.image2ApiKey;
   return {
     ...(json ? { 'Content-Type': 'application/json' } : {}),
     ...(API_TOKEN ? { 'X-API-Token': API_TOKEN } : {}),
     ...(keys.deepseekApiKey ? { 'X-DeepSeek-API-Key': keys.deepseekApiKey } : {}),
-    ...(keys.imageApiKey ? { 'X-Image-API-Key': keys.imageApiKey } : {}),
+    'X-Image-Provider': keys.imageProvider,
+    ...(imageApiKey ? { 'X-Image-API-Key': imageApiKey } : {}),
   };
 }
 
