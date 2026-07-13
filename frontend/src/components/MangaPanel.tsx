@@ -789,7 +789,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
               ))}
             </select>
           )}
-          {hasImages && (
+          {chapter && (
             <select
               value={imageDisplayMode}
               onChange={async (e) => {
