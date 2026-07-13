@@ -1404,7 +1404,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             <div className="flex-1 overflow-y-auto p-5">
               <p className="text-xs text-gray-500 mb-4 leading-relaxed">
                 {imageProvider === 'newapi'
-                  ? '当前选择省钱生图（约 1 分/张），该服务不支持垫图。已上传素材不会删除，但生成和重新生成时会自动取消使用垫图。切换回 Image2 后可继续使用。'
+                  ? '当前选择省钱生图（1 分一张），该服务不支持垫图。已上传素材不会删除，但生成和重新生成时会自动取消使用垫图。切换回 Image2 后可继续使用。'
                   : '上传角色参考图，AI 生成漫画时会保持人物外貌一致性。'}
                 {imageProvider === 'image2' && (refSource === 'story' || refSource === 'asset_group') && refImages.length > 0 && (
                   <> 当前显示首页设置的全局垫图；上传新图将创建本话专属垫图覆盖全局。</>

@@ -183,7 +183,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
                 className={`rounded-lg border p-3 text-left transition-colors ${imageProvider === 'newapi' ? 'border-emerald-500 bg-emerald-500/10' : 'border-gray-800 bg-gray-900 hover:border-gray-700'}`}
               >
                 <div className="text-sm font-medium text-gray-100">省钱生图</div>
-                <div className="mt-1 text-xs text-emerald-300">约 1 分/张 · 不支持垫图</div>
+                <div className="mt-1 text-xs font-semibold text-emerald-300">1 分一张 · 不支持垫图</div>
               </button>
               <button
                 type="button"
@@ -191,7 +191,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
                 className={`rounded-lg border p-3 text-left transition-colors ${imageProvider === 'image2' ? 'border-amber-500 bg-amber-500/10' : 'border-gray-800 bg-gray-900 hover:border-gray-700'}`}
               >
                 <div className="text-sm font-medium text-gray-100">Image2</div>
-                <div className="mt-1 text-xs text-amber-300">约 5 分/张 · 支持垫图</div>
+                <div className="mt-1 text-xs font-semibold text-amber-300">5 分一张 · 支持垫图</div>
               </button>
             </div>
 
