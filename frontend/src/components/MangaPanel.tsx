@@ -64,6 +64,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const [statusMsg, setStatusMsg] = useState('');
   const [images, setImages] = useState<ImageItem[]>([]);
   const [lightboxIdx, setLightboxIdx] = useState<number>(-1);
+  const [lightboxZoom, setLightboxZoom] = useState(1);
   const [errorMsg, setErrorMsg] = useState('');
   const [skippedNumbers, setSkippedNumbers] = useState<Set<number>>(() => new Set());
   const [scenes, setScenes] = useState<string[]>([]);
@@ -138,6 +139,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     setErrorMsg('');
     setSkippedNumbers(new Set());
     setLightboxIdx(-1);
+    setLightboxZoom(1);
     setScenes([]);
     setExpandedScenes(new Set());
     setEditingIdx(-1);
@@ -626,15 +628,26 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
 
   useEffect(() => {
     if (lightboxIdx < 0) return;
+    setLightboxZoom(1);
     const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '=' || e.key === '-')) {
+        e.preventDefault();
+        setLightboxZoom((zoom) => Math.min(4, Math.max(0.5, zoom + (e.key === '-' ? -0.25 : 0.25))));
+        return;
+      }
       if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); handleLightboxNav('prev'); }
       if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); handleLightboxNav('next'); }
       if (e.key === 'Escape') setLightboxIdx(-1);
     };
     const wheelHandler = (e: WheelEvent) => {
-      // Preserve browser zoom for Ctrl/Cmd + wheel and trackpad pinch gestures.
-      // Plain wheel still navigates between manga pages.
-      if (e.ctrlKey || e.metaKey) return;
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        setLightboxZoom((zoom) => {
+          const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+          return Math.min(4, Math.max(0.5, zoom * factor));
+        });
+        return;
+      }
       e.preventDefault();
       if (e.deltaY < 0) handleLightboxNav('prev');
       if (e.deltaY > 0) handleLightboxNav('next');
@@ -1352,9 +1365,14 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
           >
             <X size={24} />
           </button>
-          {/* Counter */}
-          <div className="absolute top-4 left-4 px-3 py-1 bg-white/10 rounded-full text-sm text-white font-mono">
-            {lightboxImg.image_number} / {imageCount}
+          {/* Counter and zoom status */}
+          <div className="absolute top-4 left-4 flex items-center gap-2 z-10">
+            <div className="px-3 py-1 bg-white/10 rounded-full text-sm text-white font-mono">
+              {lightboxImg.image_number} / {imageCount}
+            </div>
+            <div className="px-3 py-1 bg-white/10 rounded-full text-xs text-gray-200 font-mono">
+              {Math.round(lightboxZoom * 100)}%
+            </div>
           </div>
           {/* Nav up */}
           {lightboxIdx > 0 && (
@@ -1369,7 +1387,8 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
           <img
             src={mangaImageUrl(lightboxImg.image_path, imageVersions[lightboxImg.image_number])}
             alt={`Panel ${lightboxImg.image_number}`}
-            className="max-w-[90%] max-h-[75vh] object-contain rounded-lg"
+            className="max-w-[90%] max-h-[75vh] object-contain rounded-lg transition-transform duration-100"
+            style={{ transform: `scale(${lightboxZoom})` }}
             onClick={(e) => e.stopPropagation()}
           />
           {/* Nav down */}
