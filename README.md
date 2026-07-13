@@ -112,7 +112,7 @@ http://localhost:5173
 
 打开网页后，点击页面上的 **API Key** 按钮。
 
-你需要配置两个 Key：
+你需要配置 DeepSeek Key，并在两个图片服务中选择一个：
 
 #### DeepSeek API Key
 
@@ -124,17 +124,26 @@ http://localhost:5173
 https://platform.deepseek.com/usage
 ```
 
-#### Image2 API Key
+#### 图片生成服务
 
-用于生成漫画图片。
+在 API Key 设置中选择图片服务：
 
-充值入口：
+- **省钱生图**：约 1 分/张，使用 `vidu-image-gpt2`，不支持垫图。选择后，已有垫图素材会保留，但生成请求会自动取消使用垫图。
+- **Image2**：约 5 分/张，支持单张和多张垫图，适合需要保持角色外貌一致性的场景。
+
+省钱生图注册 / 充值：
+
+```text
+https://st.qinnaonao.com/sign-up?aff=iKGh
+```
+
+Image2 充值入口：
 
 ```text
 https://api.duojie.games/console/token
 ```
 
-购买后，把两个 API Key 分别填入网页里的 API Key 设置窗口，然后点击保存。
+购买后，在网页的 API Key 设置窗口选择服务、填入对应 Key，然后点击保存。
 
 ### 5. 开始测试
 

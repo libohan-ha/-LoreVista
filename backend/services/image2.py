@@ -18,16 +18,28 @@ logger.setLevel(logging.INFO)
 load_dotenv()
 
 DEFAULT_IMAGE_API_BASE_URL = "https://api.duojie.games/v1"
+DEFAULT_NEWAPI_IMAGE_BASE_URL = "https://st.qinnaonao.com/v1"
+SUPPORTED_IMAGE_PROVIDERS = {"image2", "newapi"}
 
 
-def normalize_image_api_base_url(base_url: str | None) -> str:
-    base = (base_url or DEFAULT_IMAGE_API_BASE_URL).strip().rstrip("/")
+def normalize_image_api_base_url(base_url: str | None, default: str = DEFAULT_IMAGE_API_BASE_URL) -> str:
+    base = (base_url or default).strip().rstrip("/")
     return re.sub(r"(?i)(/v1)+$", "/v1", base)
+
+
+def normalize_image_provider(provider: str | None) -> str:
+    value = (provider or "image2").strip().lower()
+    return value if value in SUPPORTED_IMAGE_PROVIDERS else "image2"
 
 
 IMAGE_API_BASE_URL = normalize_image_api_base_url(os.getenv("IMAGE_API_BASE_URL"))
 IMAGE_API_KEY = os.getenv("IMAGE_API_KEY", "")
 IMAGE_MODEL = "gpt-image-2"
+NEWAPI_IMAGE_BASE_URL = normalize_image_api_base_url(
+    os.getenv("NEWAPI_IMAGE_BASE_URL"), DEFAULT_NEWAPI_IMAGE_BASE_URL
+)
+NEWAPI_IMAGE_API_KEY = os.getenv("NEWAPI_IMAGE_API_KEY", "")
+NEWAPI_IMAGE_MODEL = os.getenv("NEWAPI_IMAGE_MODEL", "vidu-image-gpt2").strip() or "vidu-image-gpt2"
 IMAGE_SIZE = os.getenv("IMAGE_SIZE", "1024x1536").strip() or "1024x1536"
 IMAGE_QUALITY = os.getenv("IMAGE_QUALITY", "low").strip().lower()
 IMAGE_RESPONSE_FORMAT = os.getenv("IMAGE_RESPONSE_FORMAT", "url").strip().lower()
@@ -46,19 +58,25 @@ class ImageResponseLostError(RuntimeError):
     """Raised when Image2 may have succeeded upstream but no image reached us."""
 
 
-def _response_lost_message(exc: Exception) -> str:
+def _response_lost_message(exc: Exception, provider_name: str = "Image2") -> str:
     return (
-        "Image2 后台可能已经生成并扣费，但本地没有收到最终图片响应。"
-        "为避免重复扣费，应用已停止自动重试。请先到 Image2 后台确认，"
+        f"{provider_name} 后台可能已经生成并扣费，但本地没有收到最终图片响应。"
+        f"为避免重复扣费，应用已停止自动重试。请先到 {provider_name} 后台确认，"
         f"再决定是否重新生成。上游/网络错误: {exc}"
     )
 
 
-def _image_auth_headers(api_key: str | None = None, json_content: bool = False) -> dict[str, str]:
-    key = (api_key or IMAGE_API_KEY or "").strip()
+def _image_auth_headers(
+    api_key: str | None = None,
+    json_content: bool = False,
+    provider: str = "image2",
+) -> dict[str, str]:
+    provider = normalize_image_provider(provider)
+    fallback_key = NEWAPI_IMAGE_API_KEY if provider == "newapi" else IMAGE_API_KEY
+    key = (api_key or fallback_key or "").strip()
     if not key:
         from .errors import MissingApiKeyError
-        raise MissingApiKeyError("Image2")
+        raise MissingApiKeyError("NewAPI" if provider == "newapi" else "Image2")
     headers = {"Authorization": f"Bearer {key}"}
     if json_content:
         headers["Content-Type"] = "application/json"
@@ -122,16 +140,24 @@ async def generate_manga_image(
     ref_image_paths: list[str] | None = None,
     color_mode: str = "bw",
     api_key: str | None = None,
+    provider: str = "image2",
 ) -> str:
     """Generate a single manga image and save it. Returns the relative file path.
 
     `ref_image_paths` can contain multiple reference images; they will be sent
     as `image[]` multipart parts (verified to work with duojie API).
     """
+    provider = normalize_image_provider(provider)
+    provider_name = "NewAPI" if provider == "newapi" else "Image2"
+    base_url = NEWAPI_IMAGE_BASE_URL if provider == "newapi" else IMAGE_API_BASE_URL
+    model = NEWAPI_IMAGE_MODEL if provider == "newapi" else IMAGE_MODEL
     total_pages = len(all_scenes) if all_scenes else 1
     progress_label = f"{image_number}/{total_pages}"
-    # Filter to only existing files
-    valid_refs = [Path(p) for p in (ref_image_paths or []) if p and Path(p).exists()]
+    # NewAPI currently exposes generations only. Keep uploaded references on disk,
+    # but exclude them from requests so switching providers never deletes user assets.
+    valid_refs = [] if provider == "newapi" else [
+        Path(p) for p in (ref_image_paths or []) if p and Path(p).exists()
+    ]
     use_ref = bool(valid_refs)
 
     # Build prompt with character profiles and full script context.
@@ -209,16 +235,16 @@ async def generate_manga_image(
         heartbeat_task: asyncio.Task | None = None
         try:
             mode = f"edits({len(ref_blobs)}图垫图)" if ref_blobs else "generations"
-            logger.info(f"[{progress_label}] 开始调用 Image2 API [{mode}]（尝试 {attempt}/{MAX_RETRIES}）")
+            logger.info(f"[{progress_label}] 开始调用 {provider_name} API [{mode}]（尝试 {attempt}/{MAX_RETRIES}）")
             logger.info(
-                "[%s] Image2 request config: mode=%s attempt=%s/%s size=%s quality=%s response_format=%s refs=%s",
+                "[%s] %s request config: model=%s mode=%s attempt=%s/%s size=%s refs=%s",
                 progress_label,
+                provider_name,
+                model,
                 mode,
                 attempt,
                 MAX_RETRIES,
                 IMAGE_SIZE,
-                IMAGE_QUALITY,
-                IMAGE_RESPONSE_FORMAT,
                 len(ref_blobs),
             )
             t0 = time.time()
@@ -229,7 +255,7 @@ async def generate_manga_image(
                     while True:
                         await asyncio.sleep(30)
                         waited = int(time.time() - start_ts)
-                        logger.info("[%s] Still waiting for Image2 response after %ss", label, waited)
+                        logger.info("[%s] Still waiting for %s response after %ss", label, provider_name, waited)
                         logger.info(f"[{label}] 等待中... 已等待 {waited}s（上游可能排队，继续等）")
                 except asyncio.CancelledError:
                     return
@@ -251,29 +277,34 @@ async def generate_manga_image(
                             for name, blob in ref_blobs
                         ]
                     resp = await client.post(
-                        f"{IMAGE_API_BASE_URL}/images/edits",
+                        f"{base_url}/images/edits",
                         files=files,
                         data={
-                            "model": IMAGE_MODEL,
+                            "model": model,
                             "prompt": full_prompt,
                             "size": IMAGE_SIZE,
                             **_image_response_format_payload(),
                             **_image_quality_payload(),
                         },
-                        headers=_image_auth_headers(api_key),
+                        headers=_image_auth_headers(api_key, provider=provider),
                     )
                 else:
                     # Normal generation without reference
-                    resp = await client.post(
-                        f"{IMAGE_API_BASE_URL}/images/generations",
-                        json={
-                            "model": IMAGE_MODEL,
-                            "prompt": full_prompt,
+                    payload = {
+                        "model": model,
+                        "prompt": full_prompt,
+                        "n": 1,
+                    }
+                    if provider == "image2":
+                        payload.update({
                             "size": IMAGE_SIZE,
                             **_image_response_format_payload(),
                             **_image_quality_payload(),
-                        },
-                        headers=_image_auth_headers(api_key, json_content=True),
+                        })
+                    resp = await client.post(
+                        f"{base_url}/images/generations",
+                        json=payload,
+                        headers=_image_auth_headers(api_key, json_content=True, provider=provider),
                     )
                 resp.raise_for_status()
                 data = resp.json()
@@ -309,18 +340,18 @@ async def generate_manga_image(
         except asyncio.CancelledError:
             if heartbeat_task:
                 heartbeat_task.cancel()
-            logger.info(f"[{progress_label}] Image2 API call cancelled")
+            logger.info(f"[{progress_label}] {provider_name} API call cancelled")
             raise
         except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ReadError, httpx.WriteError, httpx.ProtocolError) as e:
             if heartbeat_task:
                 heartbeat_task.cancel()
-            logger.error(f"[{progress_label}] Image2 response was lost after the request may have been processed; not retrying: {e}")
-            raise ImageResponseLostError(_response_lost_message(e)) from e
+            logger.error(f"[{progress_label}] {provider_name} response was lost after the request may have been processed; not retrying: {e}")
+            raise ImageResponseLostError(_response_lost_message(e, provider_name)) from e
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as e:
             last_err = e
             if heartbeat_task:
                 heartbeat_task.cancel()
-            logger.error(f"[{progress_label}] Failed to connect to Image2 before sending request (attempt {attempt}/{MAX_RETRIES}): {e}")
+            logger.error(f"[{progress_label}] Failed to connect to {provider_name} before sending request (attempt {attempt}/{MAX_RETRIES}): {e}")
             if attempt < MAX_RETRIES:
                 logger.info(f"[{progress_label}] Retrying connection in {RETRY_DELAY}s...")
                 await asyncio.sleep(RETRY_DELAY)
@@ -328,9 +359,9 @@ async def generate_manga_image(
             last_err = e
             if heartbeat_task:
                 heartbeat_task.cancel()
-            logger.error(f"[{progress_label}] Image2 request failed; not retrying non-idempotent generation request: {e}")
+            logger.error(f"[{progress_label}] {provider_name} request failed; not retrying non-idempotent generation request: {e}")
             raise RuntimeError(
-                "Image2 生图请求失败。为避免重复扣费，应用没有自动重试。"
+                f"{provider_name} 生图请求失败。为避免重复扣费，应用没有自动重试。"
                 f"错误: {e}"
             ) from e
 
