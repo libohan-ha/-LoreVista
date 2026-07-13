@@ -618,6 +618,9 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
       if (e.key === 'Escape') setLightboxIdx(-1);
     };
     const wheelHandler = (e: WheelEvent) => {
+      // Preserve browser zoom for Ctrl/Cmd + wheel and trackpad pinch gestures.
+      // Plain wheel still navigates between manga pages.
+      if (e.ctrlKey || e.metaKey) return;
       e.preventDefault();
       if (e.deltaY < 0) handleLightboxNav('prev');
       if (e.deltaY > 0) handleLightboxNav('next');
