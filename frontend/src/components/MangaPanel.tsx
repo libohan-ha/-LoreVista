@@ -23,12 +23,15 @@ import {
   setColorMode,
   getImageCount,
   setImageCount,
+  getImageDisplayMode,
+  setImageDisplayMode,
   ALLOWED_IMAGE_COUNTS,
   mangaImageUrl,
   mangaThumbUrl,
   type Chapter,
   type MangaProgress,
   type ColorMode,
+  type ImageDisplayMode,
   type RefSource,
   type RefImage,
   type CharacterSource,
@@ -88,6 +91,8 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const [refModalOpen, setRefModalOpen] = useState(false);
   const [colorMode, setColorModeState] = useState<ColorMode>('bw');
   const [imageCount, setImageCountState] = useState(DEFAULT_IMAGE_COUNT);
+  const [imageDisplayMode, setImageDisplayModeState] = useState<ImageDisplayMode>('thumbnail');
+  const [imageDisplaySaving, setImageDisplaySaving] = useState(false);
   const [showColorMenu, setShowColorMenu] = useState(false);
   const colorMenuRef = useRef<HTMLDivElement>(null);
   const refFileRef = useRef<HTMLInputElement>(null);
@@ -136,6 +141,8 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     setRefModalOpen(false);
     setColorModeState('bw');
     setImageCountState(DEFAULT_IMAGE_COUNT);
+    setImageDisplayModeState('thumbnail');
+    setImageDisplaySaving(false);
     setShowColorMenu(false);
     // Load existing scenes and characters if available
     if (chapter) {
@@ -155,6 +162,9 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
       }).catch(() => {});
       getImageCount(chapter.id).then((c) => {
         if (chapterLoadRequestRef.current === requestId) setImageCountState(c);
+      }).catch(() => {});
+      getImageDisplayMode(chapter.id).then((mode) => {
+        if (chapterLoadRequestRef.current === requestId) setImageDisplayModeState(mode);
       }).catch(() => {});
       getScenes(chapter.id).then((s) => {
         if (chapterLoadRequestRef.current !== requestId) return;
@@ -757,6 +767,32 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             </select>
           )}
           {hasImages && (
+            <select
+              value={imageDisplayMode}
+              onChange={async (e) => {
+                if (!chapter) return;
+                const mode = e.target.value as ImageDisplayMode;
+                const previous = imageDisplayMode;
+                setImageDisplayModeState(mode);
+                setImageDisplaySaving(true);
+                try {
+                  await setImageDisplayMode(chapter.id, mode);
+                } catch (err: any) {
+                  setImageDisplayModeState(previous);
+                  setErrorMsg(`保存展示清晰度失败: ${err.message}`);
+                } finally {
+                  setImageDisplaySaving(false);
+                }
+              }}
+              disabled={imageDisplaySaving}
+              className="px-2 py-1.5 text-xs font-medium rounded-md bg-gray-800 text-gray-300 border border-gray-700 outline-none focus:border-violet-500 transition-colors disabled:opacity-50 cursor-pointer"
+              title="缩略图加载更快，原图显示更清晰但更耗流量"
+            >
+              <option value="thumbnail">缩略图展示</option>
+              <option value="original">原图展示</option>
+            </select>
+          )}
+          {hasImages && (
             <button
               onClick={() => {
                 displayImages.forEach((img) => {
@@ -1127,7 +1163,9 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                   }}
                 >
                   <img
-                    src={mangaThumbUrl(img.image_path, 1280, isRegenerating ? Date.now() : imageVersions[image_number])!}
+                    src={(imageDisplayMode === 'original'
+                      ? mangaImageUrl(img.image_path, isRegenerating ? Date.now() : imageVersions[image_number])
+                      : mangaThumbUrl(img.image_path, 1280, isRegenerating ? Date.now() : imageVersions[image_number]))!}
                     alt={`Panel ${image_number}`}
                     className={`w-full object-contain ${isRegenerating ? 'opacity-30' : ''}`}
                     loading="lazy"

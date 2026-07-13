@@ -76,6 +76,7 @@ class ChapterOut(BaseModel):
     novel_content: Optional[str] = None
     content_source: Optional[str] = None
     asset_group_id: Optional[int] = None
+    image_display_mode: Optional[str] = None
     created_at: datetime.datetime
     messages: list[ChatMessageOut] = []
     images: list[MangaImageOut] = []
