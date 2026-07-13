@@ -1315,6 +1315,7 @@ def export_story(story_id: int, db: Session = Depends(get_db)):
                 "asset_group_key": asset_group_keys.get(chapter.asset_group_id) if chapter.asset_group_id else None,
                 "color_mode": chapter.color_mode,
                 "image_count": chapter.image_count,
+                "image_display_mode": chapter.image_display_mode,
                 "created_at": _iso(chapter.created_at),
                 "messages": [
                     {"role": msg.role, "content": msg.content, "created_at": _iso(msg.created_at)}
@@ -1494,6 +1495,11 @@ async def import_story(request: Request, db: Session = Depends(get_db)):
                     asset_group_id=group_key_to_id.get(str(chapter_data.get("asset_group_key") or "")) or None,
                     color_mode=chapter_data.get("color_mode") if chapter_data.get("color_mode") in ("bw", "color") else None,
                     image_count=chapter_data.get("image_count") if chapter_data.get("image_count") in ALLOWED_IMAGE_COUNTS else None,
+                    image_display_mode=(
+                        chapter_data.get("image_display_mode")
+                        if chapter_data.get("image_display_mode") in ("thumbnail", "original")
+                        else None
+                    ),
                 )
                 db.add(chapter)
                 db.flush()
@@ -1599,6 +1605,32 @@ async def set_color_mode(chapter_id: int, body: dict, db: Session = Depends(get_
     _save_color_mode(chapter_id, mode)
     db.commit()
     return {"ok": True}
+
+
+# ─── Image Display Mode ────────────────────────────────────
+
+DEFAULT_IMAGE_DISPLAY_MODE = "thumbnail"
+ALLOWED_IMAGE_DISPLAY_MODES = {"thumbnail", "original"}
+
+
+@app.get("/api/chapters/{chapter_id}/image-display-mode")
+async def get_image_display_mode(chapter_id: int, db: Session = Depends(get_db)):
+    chapter = _require_chapter(chapter_id, db)
+    mode = chapter.image_display_mode
+    if mode not in ALLOWED_IMAGE_DISPLAY_MODES:
+        mode = DEFAULT_IMAGE_DISPLAY_MODE
+    return {"image_display_mode": mode}
+
+
+@app.put("/api/chapters/{chapter_id}/image-display-mode")
+async def set_image_display_mode(chapter_id: int, body: dict, db: Session = Depends(get_db)):
+    chapter = _require_chapter(chapter_id, db)
+    mode = body.get("image_display_mode", DEFAULT_IMAGE_DISPLAY_MODE)
+    if mode not in ALLOWED_IMAGE_DISPLAY_MODES:
+        raise HTTPException(400, "image_display_mode must be 'thumbnail' or 'original'")
+    chapter.image_display_mode = mode
+    db.commit()
+    return {"image_display_mode": mode}
 
 
 # ─── Image Count ───────────────────────────────────────────

@@ -82,6 +82,7 @@ export interface Chapter {
   chapter_number: number;
   novel_content: string | null;
   content_source?: 'chat' | 'import' | null;
+  image_display_mode?: ImageDisplayMode | null;
   created_at: string;
   messages: ChatMessage[];
   images: MangaImage[];
@@ -643,6 +644,26 @@ export async function setColorMode(chapterId: number, mode: ColorMode): Promise<
     method: 'PUT',
     headers: apiHeaders(true),
     body: JSON.stringify({ color_mode: mode }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+// ─── Image Display Mode ──────────────────────────────────────
+
+export type ImageDisplayMode = 'thumbnail' | 'original';
+
+export async function getImageDisplayMode(chapterId: number): Promise<ImageDisplayMode> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/image-display-mode`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  return data.image_display_mode === 'original' ? 'original' : 'thumbnail';
+}
+
+export async function setImageDisplayMode(chapterId: number, mode: ImageDisplayMode): Promise<void> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/image-display-mode`, {
+    method: 'PUT',
+    headers: apiHeaders(true),
+    body: JSON.stringify({ image_display_mode: mode }),
   });
   if (!res.ok) throw new Error(await res.text());
 }

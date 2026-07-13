@@ -173,6 +173,8 @@ def _migrate():
                 conn.execute(text("ALTER TABLE chapters ADD COLUMN color_mode VARCHAR(20)"))
             if "image_count" not in cols:
                 conn.execute(text("ALTER TABLE chapters ADD COLUMN image_count INTEGER"))
+            if "image_display_mode" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN image_display_mode VARCHAR(20)"))
         with engine.begin() as conn:
             conn.execute(text("""
                 UPDATE chapters

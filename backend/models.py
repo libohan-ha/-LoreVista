@@ -60,6 +60,7 @@ class Chapter(Base):
     ref_image: Mapped[str | None] = mapped_column(String(500), nullable=True)
     color_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     image_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    image_display_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
 
     story: Mapped["Story"] = relationship("Story", back_populates="chapters")
