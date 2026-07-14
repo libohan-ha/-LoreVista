@@ -1,6 +1,8 @@
 import asyncio
 import base64
+import hashlib
 import io
+import json
 import logging
 import os
 import re
@@ -54,6 +56,18 @@ RETRY_DELAY = 5  # seconds
 IMAGE_DOWNLOAD_RETRIES = 3
 
 
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+NEWAPI_CONTEXT_RADIUS = _env_int("NEWAPI_IMAGE_CONTEXT_RADIUS", 1, 0)
+NEWAPI_CONTEXT_SCENE_MAX_CHARS = _env_int("NEWAPI_IMAGE_CONTEXT_SCENE_MAX_CHARS", 180, 80)
+ERROR_BODY_LOG_CHARS = _env_int("IMAGE_API_ERROR_BODY_LOG_CHARS", 1200, 200)
+
+
 class ImageResponseLostError(RuntimeError):
     """Raised when Image2 may have succeeded upstream but no image reached us."""
 
@@ -64,6 +78,135 @@ def _response_lost_message(exc: Exception, provider_name: str = "Image2") -> str
         f"为避免重复扣费，应用已停止自动重试。请先到 {provider_name} 后台确认，"
         f"再决定是否重新生成。上游/网络错误: {exc}"
     )
+
+
+def _response_request_id(resp: httpx.Response | None) -> str:
+    if resp is None:
+        return ""
+    for header in ("X-Oneapi-Request-Id", "X-Request-Id", "x-oneapi-request-id", "x-request-id"):
+        value = resp.headers.get(header)
+        if value:
+            return value
+    return ""
+
+
+def summarize_http_status_error(
+    provider_name: str,
+    status_code: int,
+    request_id: str = "",
+    body: str = "",
+) -> str:
+    """Return a compact provider error summary without dropping the response body."""
+    body = (body or "").strip()
+    message = body
+    if body:
+        try:
+            parsed = json.loads(body)
+            err = parsed.get("error") if isinstance(parsed, dict) else None
+            if isinstance(err, dict):
+                message = str(err.get("message") or err.get("code") or body)
+        except json.JSONDecodeError:
+            message = body
+    if len(message) > ERROR_BODY_LOG_CHARS:
+        message = f"{message[:ERROR_BODY_LOG_CHARS].rstrip()}..."
+    request_part = f" request_id={request_id}" if request_id else ""
+    return f"{provider_name} HTTP {status_code}{request_part}: {message or 'empty response body'}"
+
+
+def _manga_style_prompt(color_mode: str) -> str:
+    if color_mode == "color":
+        return (
+            "日式彩色漫画插画页，竖向多格分镜布局，每页包含4-6个分镜格，"
+            "格子高度不等（动作场景用宽格，对话特写用窄格），"
+            "每个分镜格之间有清晰的边框分隔，"
+            "包含圆形/椭圆形对话气泡和中文台词，"
+            "包含漫画音效字（如“唷”“铿！”“嗡—”），"
+            "全彩高饱和度配色，日系动漫赛璐珞上色风格，"
+            "柔和光影与高光，细腻的色彩渐变，"
+            "人物绘制精美，表情生动，动作有力度感"
+        )
+    return (
+        "日式黑白漫画页，竖向多格分镜布局，每页包含4-6个分镜格，"
+        "格子高度不等（动作场景用宽格，对话特写用窄格），"
+        "每个分镜格之间有清晰的黑色边框分隔，"
+        "包含圆形/椭圆形白色对话气泡和中文台词，"
+        "包含漫画音效字（如“唷”“铿！”“嗡—”），"
+        "黑白高对比度，戏剧性光影，精细的线条和网点，"
+        "人物绘制精美，表情生动，动作有力度感"
+    )
+
+
+def _compact_scene_context(scene: str, max_chars: int = NEWAPI_CONTEXT_SCENE_MAX_CHARS) -> str:
+    compact = " ".join((scene or "").strip().split())
+    if len(compact) <= max_chars:
+        return compact
+    return f"{compact[:max_chars].rstrip()}..."
+
+
+def build_manga_image_prompt(
+    prompt: str,
+    image_number: int,
+    all_scenes: list[str] | None = None,
+    character_profiles: str = "",
+    ref_block: str = "",
+    color_mode: str = "bw",
+    provider: str = "image2",
+    use_ref: bool = False,
+) -> str:
+    """Build the provider-specific prompt sent to the image API."""
+    provider = normalize_image_provider(provider)
+    total_pages = len(all_scenes) if all_scenes else 1
+    manga_style = _manga_style_prompt(color_mode)
+
+    # When ref image is provided, skip textual character profiles; they can
+    # fight the visual reference and cause the model to invent a new cast.
+    char_block = ""
+    if character_profiles and not use_ref:
+        char_block = f"【角色外貌设定（每张图必须严格遵守）】\n{character_profiles}\n\n"
+
+    if all_scenes and provider == "newapi":
+        context_lines: list[str] = []
+        if total_pages > 1 and NEWAPI_CONTEXT_RADIUS > 0:
+            start = max(1, image_number - NEWAPI_CONTEXT_RADIUS)
+            end = min(total_pages, image_number + NEWAPI_CONTEXT_RADIUS)
+            for page_no in range(start, end + 1):
+                if page_no == image_number:
+                    continue
+                scene = all_scenes[page_no - 1]
+                context_lines.append(f"第{page_no}页：{_compact_scene_context(scene)}")
+        continuity_block = ""
+        if context_lines:
+            continuity_block = (
+                "【前后页连续性参考（不要绘制成额外分镜）】\n"
+                + "\n".join(context_lines)
+                + "\n\n"
+            )
+        return (
+            f"{ref_block}"
+            f"{char_block}"
+            f"你正在绘制一部日式漫画的第{image_number}页（共{total_pages}页）。\n"
+            "只绘制当前页，不要绘制人物资料卡，不要总结设定。\n"
+            "请保持人物外貌、服装、场景氛围和画风一致；前后页信息只作为连续性参考。\n\n"
+            f"{continuity_block}"
+            "【当前页分镜】\n"
+            f"{prompt}\n\n"
+            "【画面风格】\n"
+            f"{manga_style}"
+        )
+
+    if all_scenes:
+        script_context = "\n".join(f"第{i+1}页：{s}" for i, s in enumerate(all_scenes))
+        return (
+            f"{ref_block}"
+            f"{char_block}"
+            f"你正在绘制一部日式漫画的第{image_number}页（共{total_pages}页）。\n"
+            f"以下是完整的{total_pages}页的分镜脚本，请保持人物外貌、服装、风格的一致性：\n\n"
+            f"{script_context}\n\n"
+            f"现在请绘制第{image_number}页：\n"
+            f"{manga_style}\n{prompt}"
+        )
+
+    return f"{ref_block}{char_block}{manga_style}\n{prompt}"
 
 
 def _image_auth_headers(
@@ -213,6 +356,38 @@ async def generate_manga_image(
     else:
         full_prompt = f"{ref_block}{char_block}{MANGA_STYLE}\n{prompt}"
 
+    ref_block = ""
+    if use_ref:
+        ref_block = (
+            "【最重要：人物一致性】\n"
+            "本次提供了一张参考图，**必须严格保持参考图中主角的外貌特征**："
+            "包括发型、发色、瞳色、脸型、五官比例、服装风格——所有分镜格中的人物都必须是参考图中的同一批人物。\n"
+            "禁止凭空创造新的人物外貌。\n\n"
+        )
+
+    full_prompt = build_manga_image_prompt(
+        prompt=prompt,
+        image_number=image_number,
+        all_scenes=all_scenes,
+        character_profiles=character_profiles,
+        ref_block=ref_block,
+        color_mode=color_mode,
+        provider=provider,
+        use_ref=use_ref,
+    )
+    prompt_bytes = full_prompt.encode("utf-8")
+    prompt_hash = hashlib.sha256(prompt_bytes).hexdigest()[:16]
+    current_scene_occurrences = full_prompt.count(prompt.strip()) if prompt.strip() else 0
+    logger.info(
+        "[%s] %s prompt stats: chars=%s bytes=%s sha256=%s current_scene_occurrences=%s",
+        progress_label,
+        provider_name,
+        len(full_prompt),
+        len(prompt_bytes),
+        prompt_hash,
+        current_scene_occurrences,
+    )
+
     # Prepare reference image bytes (one or multiple)
     ref_blobs: list[tuple[str, bytes]] = []  # list of (filename, bytes)
     for idx, ref_path in enumerate(valid_refs, start=1):
@@ -306,6 +481,28 @@ async def generate_manga_image(
                         json=payload,
                         headers=_image_auth_headers(api_key, json_content=True, provider=provider),
                     )
+                response_elapsed = time.time() - t0
+                request_id = _response_request_id(resp)
+                logger.info(
+                    "[%s] %s response status=%s request_id=%s elapsed=%.1fs",
+                    progress_label,
+                    provider_name,
+                    resp.status_code,
+                    request_id or "-",
+                    response_elapsed,
+                )
+                if resp.status_code >= 400:
+                    body = resp.text[:ERROR_BODY_LOG_CHARS]
+                    logger.error(
+                        "[%s] %s",
+                        progress_label,
+                        summarize_http_status_error(
+                            provider_name,
+                            resp.status_code,
+                            request_id=request_id,
+                            body=body,
+                        ),
+                    )
                 resp.raise_for_status()
                 data = resp.json()
             heartbeat_task.cancel()
@@ -342,6 +539,26 @@ async def generate_manga_image(
                 heartbeat_task.cancel()
             logger.info(f"[{progress_label}] {provider_name} API call cancelled")
             raise
+        except httpx.HTTPStatusError as e:
+            last_err = e
+            if heartbeat_task:
+                heartbeat_task.cancel()
+            resp = e.response
+            message = summarize_http_status_error(
+                provider_name,
+                resp.status_code,
+                request_id=_response_request_id(resp),
+                body=resp.text[:ERROR_BODY_LOG_CHARS],
+            )
+            logger.error(
+                "[%s] %s request failed; not retrying non-idempotent generation request",
+                progress_label,
+                message,
+            )
+            raise RuntimeError(
+                f"{provider_name} 生图请求失败。为避免重复扣费，应用没有自动重试。"
+                f"错误: {message}"
+            ) from e
         except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ReadError, httpx.WriteError, httpx.ProtocolError) as e:
             if heartbeat_task:
                 heartbeat_task.cancel()
