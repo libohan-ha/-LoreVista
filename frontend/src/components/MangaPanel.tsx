@@ -521,6 +521,12 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     const targetId = chapter.id;
     const targetTotal = imageCount;
     genStore.start(targetId, targetTotal);
+    const mergeLocalImage = (item: ImageItem) => {
+      setImages((prev) => prev
+        .filter((existing) => existing.image_number !== item.image_number)
+        .concat(item)
+        .sort((a, b) => a.image_number - b.image_number));
+    };
 
     const controller = generateMangaStream(targetId, (event: MangaProgress) => {
       switch (event.type) {
@@ -535,11 +541,13 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
           });
           break;
         case 'image':
-          genStore.pushImage(targetId, {
+          const imageItem = {
             image_number: event.data.image_number,
             image_path: event.data.image_path,
             prompt: event.data.prompt,
-          });
+          };
+          genStore.pushImage(targetId, imageItem);
+          mergeLocalImage(imageItem);
           setSkippedNumbers((prev) => {
             const next = new Set(prev);
             next.delete(event.data.image_number);
