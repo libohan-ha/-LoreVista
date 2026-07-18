@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 import datetime
-import httpx
 import io
 import json
 import logging
@@ -33,16 +32,7 @@ from schemas import (
     StoryOut,
     StoryUpdate,
 )
-from services.deepseek import (
-    chat_stream,
-    generate_novel,
-    refine_scenes,
-    refine_single_scene,
-    resolve_llm_settings,
-    split_scenes,
-    DEEPSEEK_MODEL,
-    DEEPSEEK_BASE_URL,
-)
+from services.deepseek import chat_stream, generate_novel, refine_scenes, refine_single_scene, split_scenes
 from services.errors import MissingApiKeyError
 from services.image2 import generate_manga_image
 
@@ -199,38 +189,7 @@ def _require_chapter(chapter_id: int, db: Session) -> Chapter:
 
 
 def _user_deepseek_api_key(request: Request) -> str | None:
-    """Legacy DeepSeek key header; also accept unified X-LLM-API-Key."""
-    return request.headers.get("x-deepseek-api-key") or request.headers.get("x-llm-api-key") or None
-
-
-def _user_llm_provider(request: Request) -> str:
-    provider = (request.headers.get("x-llm-provider") or "deepseek").strip().lower()
-    return provider if provider in {"deepseek", "openai_compat"} else "deepseek"
-
-
-def _user_llm_settings(request: Request):
-    """Resolve LLM settings from request headers (DeepSeek or OpenAI-compatible)."""
-    provider = _user_llm_provider(request)
-    if provider == "openai_compat":
-        api_key = request.headers.get("x-llm-api-key") or request.headers.get("x-deepseek-api-key")
-        base_url = request.headers.get("x-llm-base-url")
-        model = request.headers.get("x-llm-model")
-        try:
-            return resolve_llm_settings(
-                provider=provider,
-                api_key=api_key,
-                base_url=base_url,
-                model=model,
-            )
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-
-    return resolve_llm_settings(
-        provider="deepseek",
-        api_key=_user_deepseek_api_key(request),
-        base_url=request.headers.get("x-llm-base-url"),
-        model=request.headers.get("x-llm-model"),
-    )
+    return request.headers.get("x-deepseek-api-key") or None
 
 
 def _user_image_api_key(request: Request) -> str | None:
@@ -347,45 +306,6 @@ def _decode_png_upload(b64: str) -> bytes:
 def on_startup():
     logger.info("LoreVista backend startup: pid=%s host=%s port=%s", os.getpid(), os.getenv("HOST", "127.0.0.1"), os.getenv("PORT", "8010"))
     init_db()
-
-
-# ─── LLM Provider / Model Listing ────────────────────────────
-
-@app.get("/api/llm/models")
-async def list_llm_models(request: Request):
-    """Fetch model list from an OpenAI-compatible /models endpoint.
-
-    Accepts the same provider/base_url/api_key/model headers as other LLM calls.
-    Only works for openai_compat; DeepSeek uses the fixed default model.
-    """
-    provider = _user_llm_provider(request)
-    if provider != "openai_compat":
-        return {"provider": "deepseek", "models": [DEEPSEEK_MODEL], "base_url": DEEPSEEK_BASE_URL}
-
-    api_key = request.headers.get("x-llm-api-key") or request.headers.get("x-deepseek-api-key")
-    base_url = request.headers.get("x-llm-base-url")
-    if not api_key:
-        raise HTTPException(400, "API Key is required to list models")
-    if not base_url:
-        raise HTTPException(400, "Base URL is required to list models")
-
-    try:
-        from services.deepseek import normalize_openai_base_url, list_models
-        resolved_base = normalize_openai_base_url(base_url)
-        models = await list_models(resolved_base, api_key)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    except httpx.HTTPStatusError as exc:
-        logger.warning("Failed to list LLM models: upstream status %s", exc.response.status_code)
-        raise HTTPException(502, "拉取模型列表失败，请检查 Base URL、API Key 和接口兼容性") from exc
-    except httpx.RequestError as exc:
-        logger.warning("Failed to list LLM models: request error %s", exc.__class__.__name__)
-        raise HTTPException(502, "拉取模型列表失败，请检查 Base URL 和网络连接") from exc
-    except Exception:
-        logger.exception("Failed to list LLM models")
-        raise HTTPException(502, "拉取模型列表失败，请稍后重试")
-
-    return {"provider": "openai_compat", "models": models, "base_url": resolved_base}
 
 
 # ─── Story CRUD ─────────────────────────────────────────────
@@ -596,7 +516,7 @@ async def chat(chapter_id: int, body: ChatMessageIn, request: Request, db: Sessi
 
     async def event_generator():
         try:
-            async for token in chat_stream(history, settings=_user_llm_settings(request)):
+            async for token in chat_stream(history, api_key=_user_deepseek_api_key(request)):
                 collected.append(token)
                 yield {"event": "token", "data": json.dumps({"content": token}, ensure_ascii=False)}
             # Save assistant message
@@ -653,7 +573,7 @@ async def generate_novel_endpoint(chapter_id: int, request: Request, db: Session
     if not history:
         raise HTTPException(400, "No chat history to generate novel from")
 
-    novel_content = await generate_novel(history, settings=_user_llm_settings(request))
+    novel_content = await generate_novel(history, api_key=_user_deepseek_api_key(request))
     chapter.novel_content = novel_content
     chapter.content_source = "chat"
 
@@ -1800,7 +1720,7 @@ async def generate_scenes_endpoint(chapter_id: int, request: Request, db: Sessio
             chat_history,
             character_profiles=_load_characters(chapter_id, db),
             page_count=image_count,
-            settings=_user_llm_settings(request),
+            api_key=_user_deepseek_api_key(request),
         )
     )
     try:
@@ -1894,7 +1814,7 @@ async def refine_single_scene_endpoint(chapter_id: int, scene_number: int, body:
             original_scenes=original_scenes,
             history=history,
             character_profiles=_load_characters(chapter_id, db),
-            settings=_user_llm_settings(request),
+            api_key=_user_deepseek_api_key(request),
         )
     except ValueError as exc:
         logger.warning("Failed to parse single scene refinement response for chapter %s scene %s: %s", chapter_id, scene_number, exc)
@@ -1946,7 +1866,7 @@ async def refine_scenes_endpoint(chapter_id: int, body: dict, request: Request, 
             history=history,
             character_profiles=_load_characters(chapter_id, db),
             page_count=image_count,
-            settings=_user_llm_settings(request),
+            api_key=_user_deepseek_api_key(request),
         )
     except ValueError as exc:
         logger.warning("Failed to parse scene refinement response for chapter %s: %s", chapter_id, exc)

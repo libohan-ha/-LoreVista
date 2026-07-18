@@ -1,10 +1,7 @@
-import ipaddress
 import json
 import os
 import re
-from dataclasses import dataclass
 from typing import AsyncGenerator
-from urllib.parse import urlparse
 
 import httpx
 from dotenv import load_dotenv
@@ -12,11 +9,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
-ALLOW_PRIVATE_OPENAI_URLS = os.getenv("ALLOW_PRIVATE_OPENAI_URLS", "false").strip().lower() in {"1", "true", "yes"}
-
-SUPPORTED_LLM_PROVIDERS = {"deepseek", "openai_compat"}
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MODEL = "deepseek-v4-flash"
 
 NOVEL_SYSTEM_PROMPT = """你是一位才华横溢、文笔细腻的网络小说家。用户会和你讨论小说的主题、风格、角色等。
 
@@ -43,146 +37,19 @@ NOVEL_SYSTEM_PROMPT = """你是一位才华横溢、文笔细腻的网络小说�
 请直接输出小说正文，不要加额外说明或字数统计。"""
 
 
-@dataclass(frozen=True)
-class LLMSettings:
-    """Resolved chat/completions settings for DeepSeek or any OpenAI-compatible gateway."""
-
-    api_key: str
-    base_url: str
-    model: str
-    provider: str
-    label: str
-
-    @property
-    def chat_completions_url(self) -> str:
-        return f"{self.base_url}/chat/completions"
-
-    @property
-    def models_url(self) -> str:
-        return f"{self.base_url}/models"
-
-
-def normalize_llm_provider(provider: str | None) -> str:
-    value = (provider or "deepseek").strip().lower()
-    return value if value in SUPPORTED_LLM_PROVIDERS else "deepseek"
-
-
-def _validate_openai_target(parsed) -> None:
-    hostname = (parsed.hostname or "").rstrip(".").lower()
-    if not hostname:
-        raise ValueError("Base URL must contain a hostname")
-    if parsed.username or parsed.password:
-        raise ValueError("Base URL must not contain username or password")
-    if not ALLOW_PRIVATE_OPENAI_URLS and (hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(".localhost")):
-        raise ValueError("Base URL must not target localhost")
-    try:
-        address = ipaddress.ip_address(hostname)
-    except ValueError:
-        return
-    if not ALLOW_PRIVATE_OPENAI_URLS and (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_multicast
-        or address.is_unspecified
-    ):
-        raise ValueError("Base URL must not target a private or reserved network address")
-
-
-def normalize_openai_base_url(base_url: str) -> str:
-    """Normalize user-provided OpenAI-compatible base URL.
-
-    Accepts common paste styles:
-    - https://api.example.com
-    - https://api.example.com/
-    - https://api.example.com/v1
-    - https://api.example.com/v1/
-    - https://api.example.com/v1/chat/completions  (trimmed back to /v1)
-    """
-    raw = (base_url or "").strip()
-    if not raw:
-        raise ValueError("Base URL is required for OpenAI-compatible provider")
-
-    if not re.match(r"^https?://", raw, re.IGNORECASE):
-        raw = f"https://{raw}"
-
-    parsed = urlparse(raw)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("Base URL must be a valid http(s) URL")
-    _validate_openai_target(parsed)
-
-    path = (parsed.path or "").rstrip("/")
-    # Users sometimes paste the full chat endpoint.
-    for suffix in ("/chat/completions", "/completions", "/models"):
-        if path.endswith(suffix):
-            path = path[: -len(suffix)].rstrip("/")
-            break
-
-    if not path:
-        path = "/v1"
-    elif not path.endswith("/v1") and not re.search(r"/v\d+$", path):
-        # Most OpenAI-compatible gateways expose /v1/* endpoints.
-        path = f"{path}/v1"
-
-    return f"{parsed.scheme}://{parsed.netloc}{path}"
-
-
-def resolve_llm_settings(
-    *,
-    provider: str | None = None,
-    api_key: str | None = None,
-    base_url: str | None = None,
-    model: str | None = None,
-) -> LLMSettings:
-    """Resolve runtime LLM settings from request headers / env fallbacks."""
-    provider_name = normalize_llm_provider(provider)
-
-    if provider_name == "openai_compat":
-        key = (api_key or "").strip()
-        if not key:
-            from .errors import MissingApiKeyError
-            raise MissingApiKeyError("OpenAI 兼容中转")
-        try:
-            resolved_base = normalize_openai_base_url(base_url or "")
-        except ValueError as exc:
-            raise ValueError(str(exc)) from exc
-        resolved_model = (model or "").strip()
-        if not resolved_model:
-            raise ValueError("Model is required for OpenAI-compatible provider")
-        return LLMSettings(
-            api_key=key,
-            base_url=resolved_base,
-            model=resolved_model,
-            provider="openai_compat",
-            label="OpenAI 兼容中转",
-        )
-
-    # Default: DeepSeek official API (env fallback for local/dev).
+def _deepseek_auth_headers(api_key: str | None = None) -> dict[str, str]:
     key = (api_key or DEEPSEEK_API_KEY or "").strip()
     if not key:
         from .errors import MissingApiKeyError
         raise MissingApiKeyError("DeepSeek")
-    resolved_base = (base_url or DEEPSEEK_BASE_URL).rstrip("/")
-    resolved_model = (model or DEEPSEEK_MODEL).strip() or DEEPSEEK_MODEL
-    return LLMSettings(
-        api_key=key,
-        base_url=resolved_base,
-        model=resolved_model,
-        provider="deepseek",
-        label="DeepSeek",
-    )
-
-
-def _auth_headers(settings: LLMSettings) -> dict[str, str]:
     return {
-        "Authorization": f"Bearer {settings.api_key}",
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
 
 
 def _loads_json_lenient(text: str):
-    # Some models occasionally return literal newlines/control chars inside quoted
+    # DeepSeek occasionally returns literal newlines/control chars inside quoted
     # strings. strict=False accepts those without treating the whole response as
     # invalid JSON.
     return json.loads(text, strict=False)
@@ -206,7 +73,6 @@ def _extract_json_array(raw: str) -> list:
             return _loads_json_lenient(match.group(0))
         except json.JSONDecodeError as second_error:
             raise ValueError("Scene split response was not valid JSON") from second_error
-
 
 def _scene_split_prompt(page_count: int = 10) -> str:
     return f"""你是一位专业漫画分镜师。请将小说内容拆分为恰好{page_count}页漫画。
@@ -236,67 +102,10 @@ def _scene_split_prompt(page_count: int = 10) -> str:
 ]"""
 
 
-def _llm_kwargs(
-    api_key: str | None = None,
-    *,
-    provider: str | None = None,
-    base_url: str | None = None,
-    model: str | None = None,
-    settings: LLMSettings | None = None,
-) -> LLMSettings:
-    if settings is not None:
-        return settings
-    return resolve_llm_settings(provider=provider, api_key=api_key, base_url=base_url, model=model)
-
-
-async def list_models(base_url: str, api_key: str) -> list[str]:
-    """Fetch model ids from an OpenAI-compatible /models endpoint."""
-    settings = resolve_llm_settings(
-        provider="openai_compat",
-        api_key=api_key,
-        base_url=base_url,
-        model="placeholder",  # not used for /models
-    )
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.get(settings.models_url, headers=_auth_headers(settings))
-        resp.raise_for_status()
-        data = resp.json()
-
-    items = data.get("data") if isinstance(data, dict) else None
-    if not isinstance(items, list):
-        raise ValueError("Models response did not contain a data array")
-
-    models: list[str] = []
-    seen: set[str] = set()
-    for item in items:
-        model_id = None
-        if isinstance(item, str):
-            model_id = item.strip()
-        elif isinstance(item, dict):
-            raw_id = item.get("id") or item.get("model") or item.get("name")
-            if isinstance(raw_id, str):
-                model_id = raw_id.strip()
-        if model_id and model_id not in seen:
-            seen.add(model_id)
-            models.append(model_id)
-
-    models.sort(key=str.lower)
-    return models
-
-
-async def chat_stream(
-    messages: list[dict],
-    api_key: str | None = None,
-    *,
-    provider: str | None = None,
-    base_url: str | None = None,
-    model: str | None = None,
-    settings: LLMSettings | None = None,
-) -> AsyncGenerator[str, None]:
-    """Stream chat response from the configured LLM."""
-    llm = _llm_kwargs(api_key, provider=provider, base_url=base_url, model=model, settings=settings)
+async def chat_stream(messages: list[dict], api_key: str | None = None) -> AsyncGenerator[str, None]:
+    """Stream chat response from DeepSeek."""
     payload = {
-        "model": llm.model,
+        "model": DEEPSEEK_MODEL,
         "messages": [{"role": "system", "content": NOVEL_SYSTEM_PROMPT}] + messages,
         "stream": True,
         "max_tokens": 16384,
@@ -305,9 +114,9 @@ async def chat_stream(
     async with httpx.AsyncClient(timeout=600) as client:
         async with client.stream(
             "POST",
-            llm.chat_completions_url,
+            f"{DEEPSEEK_BASE_URL}/chat/completions",
             json=payload,
-            headers=_auth_headers(llm),
+            headers=_deepseek_auth_headers(api_key),
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():
@@ -326,17 +135,8 @@ async def chat_stream(
                     continue
 
 
-async def generate_novel(
-    messages: list[dict],
-    api_key: str | None = None,
-    *,
-    provider: str | None = None,
-    base_url: str | None = None,
-    model: str | None = None,
-    settings: LLMSettings | None = None,
-) -> str:
+async def generate_novel(messages: list[dict], api_key: str | None = None) -> str:
     """Generate a full novel chapter (non-streaming)."""
-    llm = _llm_kwargs(api_key, provider=provider, base_url=base_url, model=model, settings=settings)
     full_messages = [{"role": "system", "content": NOVEL_SYSTEM_PROMPT}] + messages
     full_messages.append({
         "role": "user",
@@ -344,7 +144,7 @@ async def generate_novel(
     })
 
     payload = {
-        "model": llm.model,
+        "model": DEEPSEEK_MODEL,
         "messages": full_messages,
         "stream": False,
         "max_tokens": 16384,
@@ -352,9 +152,9 @@ async def generate_novel(
 
     async with httpx.AsyncClient(timeout=600) as client:
         resp = await client.post(
-            llm.chat_completions_url,
+            f"{DEEPSEEK_BASE_URL}/chat/completions",
             json=payload,
-            headers=_auth_headers(llm),
+            headers=_deepseek_auth_headers(api_key),
         )
         resp.raise_for_status()
         data = resp.json()
@@ -371,14 +171,8 @@ async def refine_single_scene(
     history: list[dict] | None = None,
     character_profiles: str = "",
     api_key: str | None = None,
-    *,
-    provider: str | None = None,
-    base_url: str | None = None,
-    model: str | None = None,
-    settings: LLMSettings | None = None,
 ) -> str:
-    """Ask the LLM to revise one manga page scene while preserving the rest."""
-    llm = _llm_kwargs(api_key, provider=provider, base_url=base_url, model=model, settings=settings)
+    """Ask DeepSeek to revise one manga page scene while preserving the rest."""
     history = history or []
     original_scenes = original_scenes or all_scenes
     context = {
@@ -404,7 +198,7 @@ async def refine_single_scene(
 {json.dumps(context, ensure_ascii=False, indent=2)}
 """
     payload = {
-        "model": llm.model,
+        "model": DEEPSEEK_MODEL,
         "messages": [
             {"role": "system", "content": "你是漫画分镜专家。只输出重写后的单页分镜字符串。"},
         ] + chat_messages + [
@@ -415,9 +209,9 @@ async def refine_single_scene(
 
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
-            llm.chat_completions_url,
+            f"{DEEPSEEK_BASE_URL}/chat/completions",
             json=payload,
-            headers=_auth_headers(llm),
+            headers=_deepseek_auth_headers(api_key),
         )
         resp.raise_for_status()
         data = resp.json()
@@ -438,7 +232,6 @@ async def refine_single_scene(
         raise ValueError("Scene refinement response was empty")
     return raw
 
-
 async def refine_scenes(
     chat_messages: list[dict],
     original_scenes: list[str],
@@ -448,14 +241,8 @@ async def refine_scenes(
     character_profiles: str = "",
     page_count: int = 10,
     api_key: str | None = None,
-    *,
-    provider: str | None = None,
-    base_url: str | None = None,
-    model: str | None = None,
-    settings: LLMSettings | None = None,
 ) -> list[str]:
-    """Ask the LLM to revise existing manga page scenes with full iteration context."""
-    llm = _llm_kwargs(api_key, provider=provider, base_url=base_url, model=model, settings=settings)
+    """Ask DeepSeek to revise existing manga page scenes with full iteration context."""
     history = history or []
     context = {
         "original_scenes": original_scenes,
@@ -479,7 +266,7 @@ async def refine_scenes(
 {json.dumps(context, ensure_ascii=False, indent=2)}
 """
     payload = {
-        "model": llm.model,
+        "model": DEEPSEEK_MODEL,
         "messages": [
             {"role": "system", "content": f"你是漫画分镜专家。输出 JSON 数组，恰好 {page_count} 个元素，每个元素是一页漫画。"},
         ] + chat_messages + [
@@ -490,9 +277,9 @@ async def refine_scenes(
 
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
-            llm.chat_completions_url,
+            f"{DEEPSEEK_BASE_URL}/chat/completions",
             json=payload,
-            headers=_auth_headers(llm),
+            headers=_deepseek_auth_headers(api_key),
         )
         resp.raise_for_status()
         data = resp.json()
@@ -505,20 +292,8 @@ async def refine_scenes(
         raise ValueError(f"Expected {page_count} scenes, got {len(scenes)}")
     return scenes
 
-
-async def split_scenes(
-    chat_messages: list[dict],
-    character_profiles: str = "",
-    page_count: int = 10,
-    api_key: str | None = None,
-    *,
-    provider: str | None = None,
-    base_url: str | None = None,
-    model: str | None = None,
-    settings: LLMSettings | None = None,
-) -> list[str]:
-    """Use the LLM to split chat novel content into manga page descriptions."""
-    llm = _llm_kwargs(api_key, provider=provider, base_url=base_url, model=model, settings=settings)
+async def split_scenes(chat_messages: list[dict], character_profiles: str = "", page_count: int = 10, api_key: str | None = None) -> list[str]:
+    """Use DeepSeek to split chat novel content into manga page descriptions."""
     scene_prompt = _scene_split_prompt(page_count)
     if character_profiles:
         scene_prompt += f"\n\n以下是角色外貌设定，分镜描述中必须严格匹配这些外貌特征：\n{character_profiles}"
@@ -526,7 +301,7 @@ async def split_scenes(
         {"role": "user", "content": scene_prompt},
     ]
     payload = {
-        "model": llm.model,
+        "model": DEEPSEEK_MODEL,
         "messages": [
             {"role": "system", "content": f"你是漫画分镜专家。输出JSON数组，恰好{page_count}个元素，每个元素是一页漫画（包含4-6个分镜格，最少4格），不是单个格子。绝对不要把一个格子作为一个数组元素，也不要每页只给3个或更少的格子。"},
         ] + messages,
@@ -535,9 +310,9 @@ async def split_scenes(
 
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
-            llm.chat_completions_url,
+            f"{DEEPSEEK_BASE_URL}/chat/completions",
             json=payload,
-            headers=_auth_headers(llm),
+            headers=_deepseek_auth_headers(api_key),
         )
         resp.raise_for_status()
         data = resp.json()

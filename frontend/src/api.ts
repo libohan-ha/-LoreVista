@@ -4,24 +4,12 @@ export const DEEPSEEK_USAGE_URL = 'https://platform.deepseek.com/usage';
 export const IMAGE2_CONSOLE_URL = 'https://api.duojie.games/sign-up?aff=EYRW';
 export const NEWAPI_SIGNUP_URL = 'https://st.qinnaonao.com/sign-up?aff=iKGh';
 export type ImageProvider = 'image2' | 'newapi';
-export type LLMProvider = 'deepseek' | 'openai_compat';
-
-export interface OpenAIProfile {
-  id: string;
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-}
 
 export interface ApiKeySettings {
   deepseekApiKey: string;
   imageProvider: ImageProvider;
   image2ApiKey: string;
   newapiApiKey: string;
-  llmProvider: LLMProvider;
-  openaiBaseUrl: string;
-  openaiApiKey: string;
-  openaiModel: string;
 }
 
 // Stored in localStorage so multiple tabs share the same API key settings.
@@ -30,12 +18,6 @@ const LS_LEGACY_IMAGE_API_KEY = 'lorevista.imageApiKey';
 const LS_IMAGE_PROVIDER = 'lorevista.imageProvider';
 const LS_IMAGE2_API_KEY = 'lorevista.image2ApiKey';
 const LS_NEWAPI_API_KEY = 'lorevista.newapiApiKey';
-const LS_LLM_PROVIDER = 'lorevista.llmProvider';
-const LS_OPENAI_BASE_URL = 'lorevista.openaiBaseUrl';
-const LS_OPENAI_API_KEY = 'lorevista.openaiApiKey';
-const LS_OPENAI_MODEL = 'lorevista.openaiModel';
-const LS_OPENAI_PROFILES = 'lorevista.openaiProfiles';
-const LS_OPENAI_ACTIVE_PROFILE = 'lorevista.openaiActiveProfile';
 export const API_KEY_CHANGE_EVENT = 'lorevista:api-key-change';
 
 export function getApiKeySettings(): ApiKeySettings {
@@ -46,10 +28,6 @@ export function getApiKeySettings(): ApiKeySettings {
     imageProvider,
     image2ApiKey: localStorage.getItem(LS_IMAGE2_API_KEY) || legacyImageKey,
     newapiApiKey: localStorage.getItem(LS_NEWAPI_API_KEY) || '',
-    llmProvider: (localStorage.getItem(LS_LLM_PROVIDER) as LLMProvider | null) || 'deepseek',
-    openaiBaseUrl: localStorage.getItem(LS_OPENAI_BASE_URL) || '',
-    openaiApiKey: localStorage.getItem(LS_OPENAI_API_KEY) || '',
-    openaiModel: localStorage.getItem(LS_OPENAI_MODEL) || '',
   };
 }
 
@@ -64,13 +42,6 @@ export function saveApiKeySettings(settings: ApiKeySettings): void {
   else localStorage.removeItem(LS_IMAGE2_API_KEY);
   if (newapi) localStorage.setItem(LS_NEWAPI_API_KEY, newapi);
   else localStorage.removeItem(LS_NEWAPI_API_KEY);
-  localStorage.setItem(LS_LLM_PROVIDER, settings.llmProvider);
-  if (settings.openaiBaseUrl.trim()) localStorage.setItem(LS_OPENAI_BASE_URL, settings.openaiBaseUrl.trim());
-  else localStorage.removeItem(LS_OPENAI_BASE_URL);
-  if (settings.openaiApiKey.trim()) localStorage.setItem(LS_OPENAI_API_KEY, settings.openaiApiKey.trim());
-  else localStorage.removeItem(LS_OPENAI_API_KEY);
-  if (settings.openaiModel.trim()) localStorage.setItem(LS_OPENAI_MODEL, settings.openaiModel.trim());
-  else localStorage.removeItem(LS_OPENAI_MODEL);
   localStorage.removeItem(LS_LEGACY_IMAGE_API_KEY);
   // Notify same-tab listeners. Other tabs receive the browser 'storage' event.
   try {
@@ -80,82 +51,19 @@ export function saveApiKeySettings(settings: ApiKeySettings): void {
   }
 }
 
-export function getOpenAIProfiles(): OpenAIProfile[] {
-  const raw = localStorage.getItem(LS_OPENAI_PROFILES);
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed.filter((item): item is OpenAIProfile => (
-          item && typeof item.id === 'string' && typeof item.baseUrl === 'string' &&
-          typeof item.apiKey === 'string' && typeof item.model === 'string' &&
-          item.baseUrl.trim() && item.apiKey.trim()
-        ));
-      }
-    } catch {
-      // Ignore malformed local storage and fall back to the legacy single profile.
-    }
-  }
-
-  const legacy = getApiKeySettings();
-  if (legacy.openaiBaseUrl.trim() && legacy.openaiApiKey.trim()) {
-    return [{
-      id: 'legacy-openai-profile',
-      baseUrl: legacy.openaiBaseUrl,
-      apiKey: legacy.openaiApiKey,
-      model: legacy.openaiModel,
-    }];
-  }
-  return [];
-}
-
-export function getActiveOpenAIProfileId(): string {
-  return localStorage.getItem(LS_OPENAI_ACTIVE_PROFILE) || '';
-}
-
-export function saveOpenAIProfiles(profiles: OpenAIProfile[], activeProfileId: string): void {
-  const cleanProfiles = profiles
-    .filter((profile) => profile.baseUrl.trim() && profile.apiKey.trim())
-    .map((profile) => ({
-      ...profile,
-      baseUrl: profile.baseUrl.trim(),
-      apiKey: profile.apiKey.trim(),
-      model: profile.model.trim(),
-    }));
-  if (cleanProfiles.length) localStorage.setItem(LS_OPENAI_PROFILES, JSON.stringify(cleanProfiles));
-  else localStorage.removeItem(LS_OPENAI_PROFILES);
-  if (activeProfileId && cleanProfiles.some((profile) => profile.id === activeProfileId)) {
-    localStorage.setItem(LS_OPENAI_ACTIVE_PROFILE, activeProfileId);
-  } else {
-    localStorage.removeItem(LS_OPENAI_ACTIVE_PROFILE);
-  }
-}
-
 export function clearApiKeySettings(): void {
-  saveApiKeySettings({ deepseekApiKey: '', imageProvider: 'image2', image2ApiKey: '', newapiApiKey: '', llmProvider: 'deepseek', openaiBaseUrl: '', openaiApiKey: '', openaiModel: '' });
-  localStorage.removeItem(LS_OPENAI_PROFILES);
-  localStorage.removeItem(LS_OPENAI_ACTIVE_PROFILE);
+  saveApiKeySettings({ deepseekApiKey: '', imageProvider: 'image2', image2ApiKey: '', newapiApiKey: '' });
 }
 
-type LlmHeaderOverrides = Pick<ApiKeySettings, 'llmProvider' | 'openaiBaseUrl' | 'openaiApiKey' | 'openaiModel'>;
-
-function apiHeaders(json = false, overrides?: Partial<LlmHeaderOverrides>): HeadersInit {
-  const keys = { ...getApiKeySettings(), ...overrides };
+function apiHeaders(json = false): HeadersInit {
+  const keys = getApiKeySettings();
   const imageApiKey = keys.imageProvider === 'newapi' ? keys.newapiApiKey : keys.image2ApiKey;
   return {
     ...(json ? { 'Content-Type': 'application/json' } : {}),
     ...(API_TOKEN ? { 'X-API-Token': API_TOKEN } : {}),
-    ...(keys.llmProvider === 'deepseek' && keys.deepseekApiKey ? { 'X-DeepSeek-API-Key': keys.deepseekApiKey } : {}),
+    ...(keys.deepseekApiKey ? { 'X-DeepSeek-API-Key': keys.deepseekApiKey } : {}),
     'X-Image-Provider': keys.imageProvider,
     ...(imageApiKey ? { 'X-Image-API-Key': imageApiKey } : {}),
-    'X-LLM-Provider': keys.llmProvider,
-    ...(keys.llmProvider === 'openai_compat'
-      ? {
-          'X-LLM-API-Key': keys.openaiApiKey,
-          'X-LLM-Base-URL': keys.openaiBaseUrl,
-          ...(keys.openaiModel ? { 'X-LLM-Model': keys.openaiModel } : {}),
-        }
-      : {}),
   };
 }
 
@@ -950,21 +858,4 @@ export function mangaImageUrl(imagePath: string, cacheBust?: number): string {
   // Served at /static/manga/chapter_1/panel_01_abc12345.png
   const url = `${BASE}/static/manga/${mangaStaticPath(imagePath)}`;
   return cacheBust ? `${url}?t=${cacheBust}` : url;
-}
-
-// ─── LLM Provider / Model Listing ──────────────────────────
-
-export interface LLMModelList {
-  provider: 'deepseek' | 'openai_compat';
-  models: string[];
-  base_url: string;
-}
-
-export async function listLlmModels(
-  settings?: Partial<LlmHeaderOverrides>,
-  signal?: AbortSignal,
-): Promise<LLMModelList> {
-  const res = await fetch(`${BASE}/api/llm/models`, { headers: apiHeaders(false, settings), signal });
-  if (!res.ok) throw new Error(await res.text());
-  return await res.json();
 }
