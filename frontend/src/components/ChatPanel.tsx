@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Send, Image, Square, MessageSquare, FileText, Save } from 'lucide-react';
+import { Send, Image, Square, MessageSquare, FileText, Save, Copy, Check } from 'lucide-react';
 import { chatStream, importNovel, type Chapter } from '../api';
 
 type Mode = 'chat' | 'import';
@@ -21,11 +21,13 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
   const [importText, setImportText] = useState('');
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState('');
+  const [copiedMessageKey, setCopiedMessageKey] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const streamingChapterIdRef = useRef<number | null>(null);
+  const copyResetRef = useRef<number | null>(null);
   const userScrolledUp = useRef(false);
   const source = chapter?.content_source ?? null;
   const isImportLocked = source === 'import';
@@ -85,6 +87,33 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
     el.addEventListener('scroll', handleScroll, { passive: true });
     return () => el.removeEventListener('scroll', handleScroll);
   }, []);
+
+  useEffect(() => () => {
+    if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
+  }, []);
+
+  const handleCopyMessage = async (content: string, key: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(content);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = content;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand('copy');
+        textarea.remove();
+        if (!copied) throw new Error('Copy failed');
+      }
+      setCopiedMessageKey(key);
+      if (copyResetRef.current !== null) window.clearTimeout(copyResetRef.current);
+      copyResetRef.current = window.setTimeout(() => setCopiedMessageKey(null), 1600);
+    } catch {
+      setCopiedMessageKey(null);
+    }
+  };
 
   const handleSend = () => {
     if (!input.trim() || !chapter || streaming || isImportLocked) return;
@@ -261,14 +290,25 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
             )}
             {messages.map((msg, i) => (
               <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div
-                  className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
-                    msg.role === 'user'
-                      ? 'bg-violet-600 text-white rounded-br-md'
-                      : 'bg-gray-800 text-gray-200 rounded-bl-md'
-                  }`}
-                >
-                  {msg.content}
+                <div className={`flex max-w-[80%] flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                  <div
+                    className={`max-w-full px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+                      msg.role === 'user'
+                        ? 'bg-violet-600 text-white rounded-br-md'
+                        : 'bg-gray-800 text-gray-200 rounded-bl-md'
+                    }`}
+                  >
+                    {msg.content}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyMessage(msg.content, `message-${i}`)}
+                    className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-gray-500 hover:bg-gray-800 hover:text-gray-300"
+                    title="复制这条消息"
+                  >
+                    {copiedMessageKey === `message-${i}` ? <Check size={12} /> : <Copy size={12} />}
+                    {copiedMessageKey === `message-${i}` ? '已复制' : '复制'}
+                  </button>
                 </div>
               </div>
             ))}
@@ -285,9 +325,20 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
             )}
             {streaming && streamContent && (
               <div className="flex justify-start">
-                <div className="max-w-[80%] px-4 py-2.5 rounded-2xl rounded-bl-md bg-gray-800 text-gray-200 text-sm leading-relaxed whitespace-pre-wrap">
-                  {streamContent}
-                  <span className="inline-block w-1.5 h-4 ml-0.5 bg-violet-400 animate-pulse rounded-sm" />
+                <div className="flex max-w-[80%] flex-col items-start">
+                  <div className="max-w-full px-4 py-2.5 rounded-2xl rounded-bl-md bg-gray-800 text-gray-200 text-sm leading-relaxed whitespace-pre-wrap">
+                    {streamContent}
+                    <span className="inline-block w-1.5 h-4 ml-0.5 bg-violet-400 animate-pulse rounded-sm" />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleCopyMessage(streamContent, 'streaming-message')}
+                    className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-gray-500 hover:bg-gray-800 hover:text-gray-300"
+                    title="复制当前内容"
+                  >
+                    {copiedMessageKey === 'streaming-message' ? <Check size={12} /> : <Copy size={12} />}
+                    {copiedMessageKey === 'streaming-message' ? '已复制' : '复制'}
+                  </button>
                 </div>
               </div>
             )}

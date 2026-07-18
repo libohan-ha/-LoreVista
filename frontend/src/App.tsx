@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home, MessageSquare, Image, PanelLeftClose, PanelLeftOpen, KeyRound, ExternalLink, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home, MessageSquare, Image, PanelLeftClose, PanelLeftOpen, KeyRound, ExternalLink, X, Eye, EyeOff } from 'lucide-react';
 import ChatPanel from './components/ChatPanel';
 import MangaPanel from './components/MangaPanel';
 import HomePage from './components/HomePage';
@@ -12,17 +12,24 @@ import {
   type Story,
   type Chapter,
   getApiKeySettings,
+  getOpenAIProfiles,
+  getActiveOpenAIProfileId,
   saveApiKeySettings,
+  saveOpenAIProfiles,
   clearApiKeySettings,
   API_KEY_CHANGE_EVENT,
   DEEPSEEK_USAGE_URL,
   IMAGE2_CONSOLE_URL,
   NEWAPI_SIGNUP_URL,
   type ImageProvider,
+  type LLMProvider,
+  type OpenAIProfile,
+  listLlmModels,
 } from './api';
 
 type View = 'home' | 'editor';
 type MobileTab = 'chat' | 'manga';
+type SettingsTab = 'llm' | 'image';
 
 const LS_STORY_ID = 'lorevista.currentStoryId';
 const LS_CHAPTER_ID = 'lorevista.currentChapterId';
@@ -86,7 +93,8 @@ function useApiKeyConfigured() {
   const read = () => {
     const s = getApiKeySettings();
     const activeImageKey = s.imageProvider === 'newapi' ? s.newapiApiKey : s.image2ApiKey;
-    return { deepseek: !!s.deepseekApiKey, image: !!activeImageKey, provider: s.imageProvider };
+    const llmConfigured = s.llmProvider === 'deepseek' ? !!s.deepseekApiKey : !!s.openaiApiKey;
+    return { deepseek: llmConfigured, image: !!activeImageKey, provider: s.imageProvider };
   };
   const [state, setState] = useState(read);
   useEffect(() => {
@@ -101,25 +109,146 @@ function useApiKeyConfigured() {
   return state;
 }
 
+function SecretInput({
+  value,
+  onChange,
+  placeholder,
+  className,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  className: string;
+}) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="relative">
+      <input
+        type={visible ? 'text' : 'password'}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className={`${className} pr-10`}
+      />
+      <button
+        type="button"
+        onClick={() => setVisible((current) => !current)}
+        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-gray-500 hover:text-gray-200"
+        title={visible ? '隐藏 API Key' : '显示 API Key'}
+        aria-label={visible ? '隐藏 API Key' : '显示 API Key'}
+      >
+        {visible ? <EyeOff size={15} /> : <Eye size={15} />}
+      </button>
+    </div>
+  );
+}
+
 function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('llm');
   const [deepseekApiKey, setDeepseekApiKey] = useState('');
   const [imageProvider, setImageProvider] = useState<ImageProvider>('image2');
   const [image2ApiKey, setImage2ApiKey] = useState('');
   const [newapiApiKey, setNewapiApiKey] = useState('');
+  const [llmProvider, setLlmProvider] = useState<LLMProvider>('deepseek');
+  const [openaiBaseUrl, setOpenaiBaseUrl] = useState('');
+  const [openaiApiKey, setOpenaiApiKey] = useState('');
+  const [openaiModel, setOpenaiModel] = useState('');
+  const [openaiProfiles, setOpenaiProfiles] = useState<OpenAIProfile[]>([]);
+  const [activeOpenaiProfileId, setActiveOpenaiProfileId] = useState('');
+  const [modelList, setModelList] = useState<string[]>([]);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [modelError, setModelError] = useState('');
+  const modelRequestRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    setSettingsTab('llm');
+    modelRequestRef.current?.abort();
+    setFetchingModels(false);
     const settings = getApiKeySettings();
     setDeepseekApiKey(settings.deepseekApiKey);
     setImageProvider(settings.imageProvider);
     setImage2ApiKey(settings.image2ApiKey);
     setNewapiApiKey(settings.newapiApiKey);
+    setLlmProvider(settings.llmProvider);
+    setOpenaiBaseUrl(settings.openaiBaseUrl);
+    setOpenaiApiKey(settings.openaiApiKey);
+    setOpenaiModel(settings.openaiModel);
+    const profiles = getOpenAIProfiles();
+    const savedActiveId = getActiveOpenAIProfileId();
+    const activeProfile = profiles.find((profile) => profile.id === savedActiveId)
+      || profiles.find((profile) => profile.baseUrl === settings.openaiBaseUrl && profile.apiKey === settings.openaiApiKey);
+    setOpenaiProfiles(profiles);
+    setActiveOpenaiProfileId(activeProfile?.id || '');
+    if (activeProfile) {
+      setOpenaiBaseUrl(activeProfile.baseUrl);
+      setOpenaiApiKey(activeProfile.apiKey);
+      setOpenaiModel(activeProfile.model);
+    }
+    setModelList([]);
+    setModelError('');
   }, [open]);
+
+  const loadModels = useCallback(async (signal: AbortSignal) => {
+    setFetchingModels(true);
+    setModelError('');
+    try {
+      const result = await listLlmModels(
+        {
+          llmProvider,
+          openaiBaseUrl,
+          openaiApiKey,
+          openaiModel,
+        },
+        signal,
+      );
+      if (signal.aborted) return;
+      setModelList(result.models);
+      const nextModel = result.models.includes(openaiModel) ? openaiModel : (result.models[0] || '');
+      setOpenaiModel(nextModel);
+    } catch (err: unknown) {
+      if (signal.aborted) return;
+      setModelError(err instanceof Error ? err.message : '拉取模型列表失败');
+      setModelList([]);
+    } finally {
+      if (!signal.aborted) setFetchingModels(false);
+    }
+  }, [llmProvider, openaiBaseUrl, openaiApiKey, openaiModel]);
+
+  const handleFetchModels = useCallback(() => {
+    modelRequestRef.current?.abort();
+    const controller = new AbortController();
+    modelRequestRef.current = controller;
+    void loadModels(controller.signal);
+  }, [loadModels]);
+
+  const selectOpenAIProfile = (profileId: string) => {
+    setActiveOpenaiProfileId(profileId);
+    const profile = openaiProfiles.find((item) => item.id === profileId);
+    setOpenaiBaseUrl(profile?.baseUrl || '');
+    setOpenaiApiKey(profile?.apiKey || '');
+    setOpenaiModel(profile?.model || '');
+    setModelList([]);
+    setModelError('');
+  };
 
   if (!open) return null;
 
   const handleSave = () => {
-    saveApiKeySettings({ deepseekApiKey, imageProvider, image2ApiKey, newapiApiKey });
+    let nextProfiles = openaiProfiles;
+    let activeProfileId = activeOpenaiProfileId;
+    if (llmProvider === 'openai_compat' && openaiBaseUrl.trim() && openaiApiKey.trim()) {
+      activeProfileId = activeProfileId || `openai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const profile: OpenAIProfile = {
+        id: activeProfileId,
+        baseUrl: openaiBaseUrl.trim(),
+        apiKey: openaiApiKey.trim(),
+        model: openaiModel.trim(),
+      };
+      nextProfiles = [profile, ...openaiProfiles.filter((item) => item.id !== activeProfileId)];
+      saveOpenAIProfiles(nextProfiles, activeProfileId);
+    }
+    saveApiKeySettings({ deepseekApiKey, imageProvider, image2ApiKey, newapiApiKey, llmProvider, openaiBaseUrl, openaiApiKey, openaiModel });
     onClose();
   };
 
@@ -130,9 +259,38 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
     setImageProvider('image2');
     setImage2ApiKey('');
     setNewapiApiKey('');
+    setLlmProvider('deepseek');
+    setOpenaiBaseUrl('');
+    setOpenaiApiKey('');
+    setOpenaiModel('');
+    setOpenaiProfiles([]);
+    setActiveOpenaiProfileId('');
+    setModelList([]);
+    modelRequestRef.current?.abort();
   };
 
-  const hasAny = !!(deepseekApiKey || image2ApiKey || newapiApiKey);
+  const handleDeleteOpenAIProfile = () => {
+    if (!activeOpenaiProfileId) return;
+    const nextProfiles = openaiProfiles.filter((profile) => profile.id !== activeOpenaiProfileId);
+    const nextActive = nextProfiles[0];
+    saveOpenAIProfiles(nextProfiles, nextActive?.id || '');
+    saveApiKeySettings({
+      deepseekApiKey,
+      imageProvider,
+      image2ApiKey,
+      newapiApiKey,
+      llmProvider,
+      openaiBaseUrl: nextActive?.baseUrl || '',
+      openaiApiKey: nextActive?.apiKey || '',
+      openaiModel: nextActive?.model || '',
+    });
+    setOpenaiProfiles(nextProfiles);
+    selectOpenAIProfile(nextActive?.id || '');
+  };
+
+  const hasAny = !!(deepseekApiKey || image2ApiKey || newapiApiKey || (llmProvider === 'openai_compat' ? openaiApiKey : ''));
+
+  const openaiFields = llmProvider === 'openai_compat';
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
@@ -151,6 +309,28 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
         </div>
 
         <div className="space-y-5 px-5 py-5">
+          <div className="grid grid-cols-2 rounded-lg border border-gray-800 bg-gray-900 p-1">
+            <button
+              type="button"
+              onClick={() => setSettingsTab('llm')}
+              className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${settingsTab === 'llm' ? 'bg-violet-600 text-white' : 'text-gray-400 hover:text-gray-100'}`}
+            >
+              <MessageSquare size={15} />
+              对话模型
+            </button>
+            <button
+              type="button"
+              onClick={() => setSettingsTab('image')}
+              className={`inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${settingsTab === 'image' ? 'bg-violet-600 text-white' : 'text-gray-400 hover:text-gray-100'}`}
+            >
+              <Image size={15} />
+              图片生成服务
+            </button>
+          </div>
+
+          {settingsTab === 'llm' && (
+          <>
+          {llmProvider === 'deepseek' && (
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-3">
               <label className="text-xs font-medium text-gray-300">DeepSeek API Key</label>
@@ -164,23 +344,150 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
                 <ExternalLink size={12} />
               </a>
             </div>
-            <input
-              type="password"
+            <SecretInput
               value={deepseekApiKey}
-              onChange={(e) => setDeepseekApiKey(e.target.value)}
+              onChange={setDeepseekApiKey}
               placeholder="sk-..."
               className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-violet-500"
             />
             <p className="text-xs text-gray-500">用于 AI 对话、生成小说正文和生成分镜。</p>
           </div>
+          )}
 
+          {/* LLM Provider Selection */}
+          <div className="space-y-3">
+            <label className="text-xs font-medium text-gray-300">对话/分镜模型服务</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  modelRequestRef.current?.abort();
+                  setFetchingModels(false);
+                  setLlmProvider('deepseek');
+                }}
+                className={`min-w-0 rounded-lg border p-3 text-left transition-colors ${llmProvider === 'deepseek' ? 'border-violet-500 bg-violet-500/10' : 'border-gray-800 bg-gray-900 hover:border-gray-700'}`}
+              >
+                <div className="text-sm font-medium text-gray-100">DeepSeek 官方</div>
+                <div className="mt-1 text-xs font-semibold text-violet-300">使用 DeepSeek API</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  modelRequestRef.current?.abort();
+                  setFetchingModels(false);
+                  setLlmProvider('openai_compat');
+                }}
+                className={`min-w-0 rounded-lg border p-3 text-left transition-colors ${llmProvider === 'openai_compat' ? 'border-sky-500 bg-sky-500/10' : 'border-gray-800 bg-gray-900 hover:border-gray-700'}`}
+              >
+                <div className="text-sm font-medium text-gray-100">OpenAI 兼容中转</div>
+                <div className="mt-1 text-xs font-semibold text-sky-300">自定义 Base URL + Model</div>
+              </button>
+            </div>
+
+            {openaiFields && (
+              <div className="space-y-3 rounded-lg border border-gray-800 bg-gray-900/60 p-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-gray-300">已保存的中转配置</label>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={activeOpenaiProfileId}
+                      onChange={(e) => selectOpenAIProfile(e.target.value)}
+                      className="min-w-0 flex-1 rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100 outline-none focus:border-sky-500"
+                    >
+                      <option value="">新建中转配置</option>
+                      {openaiProfiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>{profile.baseUrl}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={handleDeleteOpenAIProfile}
+                      disabled={!activeOpenaiProfileId}
+                      className="shrink-0 rounded-lg border border-gray-700 p-2 text-gray-400 hover:border-rose-700 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40"
+                      title="删除当前中转配置"
+                      aria-label="删除当前中转配置"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-gray-500">点击底部“保存”会记录当前 URL、Key 和模型，下次可直接切换。</p>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-gray-300">Base URL</label>
+                  <input
+                    type="text"
+                    value={openaiBaseUrl}
+                    onChange={(e) => {
+                      setOpenaiBaseUrl(e.target.value);
+                      setModelList([]);
+                      setModelError('');
+                    }}
+                    placeholder="https://api.openai.com 或中转地址"
+                    className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100 outline-none focus:border-sky-500 placeholder-gray-600"
+                  />
+                  <p className="text-[11px] text-gray-500">填写支持 OpenAI chat/completions 接口的中转地址，会自动补全 /v1。</p>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-gray-300">API Key</label>
+                  <SecretInput
+                    value={openaiApiKey}
+                    onChange={(value) => {
+                      setOpenaiApiKey(value);
+                      setModelList([]);
+                      setModelError('');
+                    }}
+                    placeholder="sk-..."
+                    className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100 outline-none focus:border-sky-500"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-xs font-medium text-gray-300">Model</label>
+                    {modelList.length > 0 && (
+                      <span className="text-[11px] text-gray-500">共 {modelList.length} 个模型</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={modelList.includes(openaiModel) ? openaiModel : ''}
+                      onChange={(e) => setOpenaiModel(e.target.value)}
+                      disabled={fetchingModels || modelList.length === 0}
+                      className="min-w-0 flex-1 appearance-none rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100 outline-none focus:border-sky-500 disabled:opacity-50"
+                    >
+                      {modelList.length === 0 && !fetchingModels ? (
+                        <option value="">请先填写 Base URL 和 API Key，再点击拉取</option>
+                      ) : (
+                        modelList.map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))
+                      )}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={handleFetchModels}
+                      disabled={fetchingModels || !openaiBaseUrl.trim() || !openaiApiKey.trim()}
+                      className="shrink-0 rounded-lg border border-sky-700 px-3 py-2 text-xs font-medium text-sky-300 hover:border-sky-500 hover:text-sky-200 disabled:cursor-not-allowed disabled:border-gray-800 disabled:text-gray-600"
+                    >
+                      {fetchingModels ? '拉取中...' : '拉取'}
+                    </button>
+                  </div>
+                  {modelError && <p className="text-[11px] text-red-400">{modelError}</p>}
+                  <p className="text-[11px] text-gray-500">填写 Base URL 和 API Key 后，点击右侧按钮从 /models 端点拉取模型。</p>
+                </div>
+              </div>
+            )}
+          </div>
+          </>
+          )}
+
+          {settingsTab === 'image' && (
           <div className="space-y-3">
             <label className="text-xs font-medium text-gray-300">图片生成服务</label>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => setImageProvider('newapi')}
-                className={`rounded-lg border p-3 text-left transition-colors ${imageProvider === 'newapi' ? 'border-emerald-500 bg-emerald-500/10' : 'border-gray-800 bg-gray-900 hover:border-gray-700'}`}
+                className={`min-w-0 rounded-lg border p-3 text-left transition-colors ${imageProvider === 'newapi' ? 'border-emerald-500 bg-emerald-500/10' : 'border-gray-800 bg-gray-900 hover:border-gray-700'}`}
               >
                 <div className="text-sm font-medium text-gray-100">省钱生图</div>
                 <div className="mt-1 text-xs font-semibold text-emerald-300">1 分一张 · 不支持垫图</div>
@@ -188,7 +495,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
               <button
                 type="button"
                 onClick={() => setImageProvider('image2')}
-                className={`rounded-lg border p-3 text-left transition-colors ${imageProvider === 'image2' ? 'border-amber-500 bg-amber-500/10' : 'border-gray-800 bg-gray-900 hover:border-gray-700'}`}
+                className={`min-w-0 rounded-lg border p-3 text-left transition-colors ${imageProvider === 'image2' ? 'border-amber-500 bg-amber-500/10' : 'border-gray-800 bg-gray-900 hover:border-gray-700'}`}
               >
                 <div className="text-sm font-medium text-gray-100">Image2</div>
                 <div className="mt-1 text-xs font-semibold text-amber-300">5 分一张 · 支持垫图</div>
@@ -203,7 +510,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
                     注册 / 充值 <ExternalLink size={12} />
                   </a>
                 </div>
-                <input type="password" value={newapiApiKey} onChange={(e) => setNewapiApiKey(e.target.value)} placeholder="填入省钱生图 API Key" className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-emerald-500" />
+                <SecretInput value={newapiApiKey} onChange={setNewapiApiKey} placeholder="填入省钱生图 API Key" className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-emerald-500" />
                 <p className="text-xs leading-relaxed text-gray-500">使用 vidu-image-gpt2。选择该服务时，已上传的垫图会保留，但生成请求会自动取消使用垫图。</p>
               </div>
             ) : (
@@ -214,11 +521,12 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
                     充值链接 <ExternalLink size={12} />
                   </a>
                 </div>
-                <input type="password" value={image2ApiKey} onChange={(e) => setImage2ApiKey(e.target.value)} placeholder="填入 Image2 API Key" className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-amber-500" />
+                <SecretInput value={image2ApiKey} onChange={setImage2ApiKey} placeholder="填入 Image2 API Key" className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-amber-500" />
                 <p className="text-xs text-gray-500">支持单张和多张垫图，用于保持角色外貌一致性。</p>
               </div>
             )}
           </div>
+          )}
         </div>
 
         <div className="flex items-center justify-between gap-2 border-t border-gray-800 px-5 py-4">
@@ -245,6 +553,8 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
 
 function ApiKeyButton({ onClick, compact = false }: { onClick: () => void; compact?: boolean }) {
   const { deepseek, image, provider } = useApiKeyConfigured();
+  const llmSettings = getApiKeySettings();
+  const llmLabel = llmSettings.llmProvider === 'openai_compat' ? 'OpenAI中转' : 'DeepSeek';
   const status: 'ok' | 'partial' | 'none' =
     deepseek && image ? 'ok' : deepseek || image ? 'partial' : 'none';
   const dotColor =
@@ -252,9 +562,9 @@ function ApiKeyButton({ onClick, compact = false }: { onClick: () => void; compa
   const providerName = provider === 'newapi' ? '省钱生图' : 'Image2';
   const tipText =
     status === 'ok'
-      ? `已配置 DeepSeek + ${providerName} API Key`
+      ? `已配置 ${llmLabel} + ${providerName} API Key`
       : status === 'partial'
-      ? `仅配置了 ${deepseek ? 'DeepSeek' : providerName} API Key`
+      ? `仅配置了 ${deepseek ? llmLabel : providerName}`
       : '未配置 API Key — 点击设置';
   return (
     <button
