@@ -237,6 +237,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
       scene: img.prompt || '',
       img,
     }));
+  const allGalleryImagesReady = gallerySlots.length > 0 && gallerySlots.every(({ img }) => !!img);
   const lightboxImg = lightboxIdx >= 0 ? displayImages[lightboxIdx] : null;
 
   const refreshChapterAssetFallback = async (chapterId: number) => {
@@ -1195,6 +1196,12 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             const isRegenerating = regenIdx === image_number;
             const isCurrentGenerating = generating && liveProgress.current === image_number && !img;
             const isSkipped = liveSkippedNumbers.has(image_number) && !img;
+            const canRegenerateImage = !generating && allGalleryImagesReady && !isRegenerating;
+            const regenerateTitle = generating
+              ? '全部图片生成完成后可重新生成'
+              : allGalleryImagesReady
+                ? '重新生成此图'
+                : '图片尚未全部生成，完成后可重新生成';
             return (
               <div key={image_number} className="group">
                 {img ? (
@@ -1218,14 +1225,22 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                   <div className="absolute top-3 left-3 px-2 py-0.5 bg-black/70 rounded text-[10px] text-gray-300 font-mono">
                     {image_number}/{imageCount}
                   </div>
-                  {scenes[image_number - 1] && !isRegenerating && !generating && (
+                  {scenes[image_number - 1] && !isRegenerating && (
                     <button
+                      type="button"
                       onClick={(e) => {
                         e.stopPropagation();
+                        if (!canRegenerateImage) return;
                         handleRegenImage(image_number);
                       }}
-                      className="absolute top-3 right-3 z-10 p-1.5 rounded-md bg-black/70 hover:bg-amber-500 text-white hover:text-gray-950 transition-colors"
-                      title="重新生成此图"
+                      disabled={!canRegenerateImage}
+                      className={`absolute top-3 right-3 z-10 p-1.5 rounded-md transition-colors ${
+                        canRegenerateImage
+                          ? 'bg-black/70 hover:bg-amber-500 text-white hover:text-gray-950'
+                          : 'bg-black/45 text-gray-500 cursor-not-allowed opacity-70'
+                      }`}
+                      title={regenerateTitle}
+                      aria-label={regenerateTitle}
                     >
                       <RefreshCw size={12} />
                     </button>
