@@ -477,14 +477,24 @@ async def upload_story_cover(story_id: int, request: Request, db: Session = Depe
     covers_dir = manga_dir / "covers"
     covers_dir.mkdir(parents=True, exist_ok=True)
     filename = f"cover_{story_id}_{uuid.uuid4().hex[:8]}.png"
-    _write_bytes_or_conflict(covers_dir / filename, img_bytes, "story cover")
-    # Delete old cover file if exists
+    final_path = covers_dir / filename
+    # Atomic write: write to a temp file, then rename. A partial write due to
+    # crash/timeout leaves only the .tmp file behind; the final_path stays
+    # untouched so the DB never ends up pointing at a half-written PNG.
+    tmp_path = covers_dir / (".tmp_" + filename)
+    try:
+        tmp_path.write_bytes(img_bytes)
+        tmp_path.replace(final_path)
+    except OSError as exc:
+        logger.warning("Failed to write story cover %s: %s", final_path, exc)
+        with contextlib.suppress(OSError):
+            tmp_path.unlink(missing_ok=True)
+        raise HTTPException(409, "story cover file is currently in use. Try again later")
+    # Delete old cover file if exists (best-effort; do not fail the request)
     if story.cover_image:
         old = Path(__file__).resolve().parent / story.cover_image
-        try:
+        with contextlib.suppress(HTTPException, OSError):
             _unlink_file(old, "old story cover")
-        except HTTPException:
-            logger.warning("Old story cover remained after replacement: %s", old)
     story.cover_image = f"manga_outputs/covers/{filename}"
     db.commit()
     db.refresh(story)
@@ -2204,6 +2214,11 @@ async def cancel_manga_generation(chapter_id: int):
 async def regenerate_single_image(chapter_id: int, image_number: int, body: dict, request: Request, db: Session = Depends(get_db)):
     """Regenerate a single panel image with an updated prompt."""
     logger.info("Regenerate manga image requested: chapter_id=%s image_number=%s", chapter_id, image_number)
+    # Guard against concurrent batch generation: if the background manga job is
+    # still running for this chapter, refusing the request avoids two writers
+    # racing on the same image_number row (clobbers, duplicate files, leaked PNGs).
+    if chapter_id in ACTIVE_MANGA_GENERATIONS:
+        raise HTTPException(409, "正在批量生成漫画,请先停止批量生成再重新生成单张")
     chapter = db.get(Chapter, chapter_id)
     if not chapter:
         raise HTTPException(404, "Chapter not found")
