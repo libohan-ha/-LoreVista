@@ -106,6 +106,8 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const chapterLoadRequestRef = useRef(0);
   const sceneAbortRef = useRef<AbortController | null>(null);
   const mangaAbortRef = useRef<Map<number, AbortController>>(new Map());
+  const activeChapterIdRef = useRef<number | null>(chapter?.id ?? null);
+  activeChapterIdRef.current = chapter?.id ?? null;
   const [imageProvider, setImageProvider] = useState<ImageProvider>(() => getApiKeySettings().imageProvider);
 
   useEffect(() => {
@@ -406,20 +408,22 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     if (!chapter) return;
     const prompt = scenes[imageNumber - 1];
     if (!prompt) return;
+    const targetId = chapter.id;
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 12 * 60 * 1000);
     setRegenIdx(imageNumber);
     setErrorMsg('');
     try {
       // Save scenes first
-      await updateScenes(chapter.id, scenes);
-      const result = await regenerateImage(chapter.id, imageNumber, prompt, controller.signal);
+      await updateScenes(targetId, scenes);
+      const result = await regenerateImage(targetId, imageNumber, prompt, controller.signal);
       // Update in images list
       const newItem: ImageItem = {
         image_number: result.image_number,
         image_path: result.image_path,
         prompt: result.prompt,
       };
+      if (activeChapterIdRef.current !== targetId) return;
       setImages((prev) => {
         const updated = prev.length > 0 ? [...prev] : [...existingImages];
         const idx = updated.findIndex((i) => i.image_number === imageNumber);
@@ -428,13 +432,15 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
         return updated.sort((a, b) => a.image_number - b.image_number);
       });
       setImageVersions((prev) => ({ ...prev, [imageNumber]: Date.now() }));
-      onChapterRefresh?.(chapter.id);
+      onChapterRefresh?.(targetId);
     } catch (err: any) {
-      const message = err?.name === 'AbortError' ? '图片生成等待超时或连接中断，请刷新章节确认是否已经保存' : err.message;
-      setErrorMsg(`第${imageNumber}张重新生成失败: ${message}`);
+      if (activeChapterIdRef.current === targetId) {
+        const message = err?.name === 'AbortError' ? '图片生成等待超时或连接中断，请刷新章节确认是否已经保存' : err.message;
+        setErrorMsg(`第${imageNumber}张重新生成失败: ${message}`);
+      }
     } finally {
       window.clearTimeout(timeoutId);
-      setRegenIdx(-1);
+      if (activeChapterIdRef.current === targetId) setRegenIdx(-1);
     }
   };
 
@@ -450,6 +456,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     const imageNumber = panelUploadNumberRef.current;
     panelUploadNumberRef.current = null;
     if (!chapter || !file || !imageNumber) return;
+    const targetId = chapter.id;
     if (!file.type.startsWith('image/')) {
       setErrorMsg('请选择图片文件');
       return;
@@ -462,12 +469,13 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
         reader.readAsDataURL(file);
       });
       const prompt = scenes[imageNumber - 1] || '';
-      const result = await uploadMangaImage(chapter.id, imageNumber, base64, prompt);
+      const result = await uploadMangaImage(targetId, imageNumber, base64, prompt);
       const newItem: ImageItem = {
         image_number: result.image_number,
         image_path: result.image_path,
         prompt: result.prompt,
       };
+      if (activeChapterIdRef.current !== targetId) return;
       setImages((prev) => {
         const updated = prev.length > 0 ? [...prev] : [...existingImages];
         const idx = updated.findIndex((i) => i.image_number === imageNumber);
@@ -477,7 +485,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
       });
       setImageVersions((prev) => ({ ...prev, [imageNumber]: Date.now() }));
       setErrorMsg('');
-      onChapterRefresh?.(chapter.id);
+      onChapterRefresh?.(targetId);
     } catch (err: any) {
       setErrorMsg(`上传第 ${imageNumber} 张失败: ${err.message}`);
     }
@@ -523,6 +531,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     const targetTotal = imageCount;
     genStore.start(targetId, targetTotal);
     const mergeLocalImage = (item: ImageItem) => {
+      if (activeChapterIdRef.current !== targetId) return;
       setImages((prev) => prev
         .filter((existing) => existing.image_number !== item.image_number)
         .concat(item)
@@ -549,22 +558,26 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
           };
           genStore.pushImage(targetId, imageItem);
           mergeLocalImage(imageItem);
-          setSkippedNumbers((prev) => {
-            const next = new Set(prev);
-            next.delete(event.data.image_number);
-            return next;
-          });
+          if (activeChapterIdRef.current === targetId) {
+            setSkippedNumbers((prev) => {
+              const next = new Set(prev);
+              next.delete(event.data.image_number);
+              return next;
+            });
+          }
           // Terminal state is only set on 'done' / 'error' so skip/cancel/reconnect stay consistent.
           break;
         case 'skipped':
           genStore.markSkipped(targetId, event.data.image_number);
-          setSkippedNumbers((prev) => new Set(prev).add(event.data.image_number));
+          if (activeChapterIdRef.current === targetId) {
+            setSkippedNumbers((prev) => new Set(prev).add(event.data.image_number));
+          }
           break;
         case 'done':
           mangaAbortRef.current.delete(targetId);
           {
             const doneState = genStore.get(targetId);
-            if (doneState?.images.length) {
+            if (activeChapterIdRef.current === targetId && doneState?.images.length) {
               setImages(doneState.images);
             }
             const cancelled = !!event.data?.cancelled;
@@ -577,7 +590,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
           mangaAbortRef.current.delete(targetId);
           {
             const errorState = genStore.get(targetId);
-            if (errorState?.images.length) {
+            if (activeChapterIdRef.current === targetId && errorState?.images.length) {
               setImages(errorState.images);
             }
           }
