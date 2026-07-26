@@ -56,10 +56,7 @@ function replaceHash(hash: string) {
 
 function useIsMobile() {
   const read = () =>
-    navigator.maxTouchPoints > 0 ||
-    window.matchMedia('(any-pointer: coarse)').matches ||
-    window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`).matches ||
-    window.matchMedia('(pointer: coarse)').matches;
+    window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`).matches;
   const [isMobile, setIsMobile] = useState(read);
 
   useEffect(() => {
@@ -92,7 +89,11 @@ function useIsMobile() {
 function useApiKeyConfigured() {
   const read = () => {
     const s = getApiKeySettings();
-    const activeImageKey = s.imageProvider === 'newapi' ? s.newapiApiKey : s.image2ApiKey;
+    const activeImageKey = s.imageProvider === 'newapi'
+      ? s.newapiApiKey
+      : s.imageProvider === 'ai98pro'
+        ? s.ai98proApiKey
+        : s.image2ApiKey;
     const llmConfigured = s.llmProvider === 'deepseek' ? !!s.deepseekApiKey : !!s.openaiApiKey;
     return { deepseek: llmConfigured, image: !!activeImageKey, provider: s.imageProvider };
   };
@@ -121,14 +122,25 @@ function SecretInput({
   className: string;
 }) {
   const [visible, setVisible] = useState(false);
+  const displayValue = visible ? value : '*'.repeat(value.length);
+  const reveal = () => setVisible(true);
   return (
     <div className="relative">
       <input
-        type={visible ? 'text' : 'password'}
-        value={value}
+        type="text"
+        inputMode="text"
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        data-lpignore="true"
+        data-1p-ignore="true"
+        name={`lorevista-secret-${placeholder}`}
+        value={displayValue}
+        onFocus={reveal}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className={`${className} pr-10`}
+        className={`${className} pr-10 font-mono`}
       />
       <button
         type="button"
@@ -149,6 +161,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
   const [imageProvider, setImageProvider] = useState<ImageProvider>('image2');
   const [image2ApiKey, setImage2ApiKey] = useState('');
   const [newapiApiKey, setNewapiApiKey] = useState('');
+  const [ai98proApiKey, setAi98proApiKey] = useState('');
   const [llmProvider, setLlmProvider] = useState<LLMProvider>('deepseek');
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState('');
   const [openaiApiKey, setOpenaiApiKey] = useState('');
@@ -170,6 +183,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
     setImageProvider(settings.imageProvider);
     setImage2ApiKey(settings.image2ApiKey);
     setNewapiApiKey(settings.newapiApiKey);
+    setAi98proApiKey(settings.ai98proApiKey);
     setLlmProvider(settings.llmProvider);
     setOpenaiBaseUrl(settings.openaiBaseUrl);
     setOpenaiApiKey(settings.openaiApiKey);
@@ -248,7 +262,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
       nextProfiles = [profile, ...openaiProfiles.filter((item) => item.id !== activeProfileId)];
       saveOpenAIProfiles(nextProfiles, activeProfileId);
     }
-    saveApiKeySettings({ deepseekApiKey, imageProvider, image2ApiKey, newapiApiKey, llmProvider, openaiBaseUrl, openaiApiKey, openaiModel });
+    saveApiKeySettings({ deepseekApiKey, imageProvider, image2ApiKey, newapiApiKey, ai98proApiKey, llmProvider, openaiBaseUrl, openaiApiKey, openaiModel });
     onClose();
   };
 
@@ -259,6 +273,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
     setImageProvider('image2');
     setImage2ApiKey('');
     setNewapiApiKey('');
+    setAi98proApiKey('');
     setLlmProvider('deepseek');
     setOpenaiBaseUrl('');
     setOpenaiApiKey('');
@@ -279,6 +294,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
       imageProvider,
       image2ApiKey,
       newapiApiKey,
+      ai98proApiKey,
       llmProvider,
       openaiBaseUrl: nextActive?.baseUrl || '',
       openaiApiKey: nextActive?.apiKey || '',
@@ -288,7 +304,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
     selectOpenAIProfile(nextActive?.id || '');
   };
 
-  const hasAny = !!(deepseekApiKey || image2ApiKey || newapiApiKey || (llmProvider === 'openai_compat' ? openaiApiKey : ''));
+  const hasAny = !!(deepseekApiKey || image2ApiKey || newapiApiKey || ai98proApiKey || (llmProvider === 'openai_compat' ? openaiApiKey : ''));
 
   const openaiFields = llmProvider === 'openai_compat';
 
@@ -483,7 +499,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
           {settingsTab === 'image' && (
           <div className="space-y-3">
             <label className="text-xs font-medium text-gray-300">图片生成服务</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => setImageProvider('newapi')}
@@ -500,6 +516,14 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
                 <div className="text-sm font-medium text-gray-100">Image2</div>
                 <div className="mt-1 text-xs font-semibold text-amber-300">5 分一张 · 支持垫图</div>
               </button>
+              <button
+                type="button"
+                onClick={() => setImageProvider('ai98pro')}
+                className={`min-w-0 rounded-lg border p-3 text-left transition-colors ${imageProvider === 'ai98pro' ? 'border-sky-500 bg-sky-500/10' : 'border-gray-800 bg-gray-900 hover:border-gray-700'}`}
+              >
+                <div className="text-sm font-medium text-gray-100">AI98Pro</div>
+                <div className="mt-1 text-xs font-semibold text-sky-300">gpt-image-2 · 支持垫图</div>
+              </button>
             </div>
 
             {imageProvider === 'newapi' ? (
@@ -512,6 +536,15 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
                 </div>
                 <SecretInput value={newapiApiKey} onChange={setNewapiApiKey} placeholder="填入省钱生图 API Key" className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-emerald-500" />
                 <p className="text-xs leading-relaxed text-gray-500">使用 vidu-image-gpt2。选择该服务时，已上传的垫图会保留，但生成请求会自动取消使用垫图。</p>
+              </div>
+            ) : imageProvider === 'ai98pro' ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <label className="text-xs font-medium text-gray-300">AI98Pro API Key</label>
+                  <span className="text-xs text-sky-300">ai98pro.xyz</span>
+                </div>
+                <SecretInput value={ai98proApiKey} onChange={setAi98proApiKey} placeholder="Enter AI98Pro API Key" className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-sky-500" />
+                <p className="text-xs leading-relaxed text-gray-500">Uses gpt-image-2 via AI98Pro; uploaded reference images are sent through /v1/images/edits.</p>
               </div>
             ) : (
               <div className="space-y-2">
@@ -926,7 +959,7 @@ function App() {
       )}
 
       {/* Bottom navigation */}
-      <footer className="h-14 border-t border-gray-800 flex items-center justify-center gap-2 md:gap-4 shrink-0 bg-gray-950/80 backdrop-blur-sm px-2">
+      <footer className="h-14 w-full max-w-full overflow-hidden border-t border-gray-800 flex items-center justify-center gap-2 md:gap-4 shrink-0 bg-gray-950/80 backdrop-blur-sm px-2">
         <button
           onClick={handlePrev}
           disabled={currentIdx === 0}
@@ -950,13 +983,13 @@ function App() {
           <Trash2 size={14} />
         </button>
 
-        <div className="flex items-center gap-1 text-xs text-gray-600">
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto overscroll-x-contain px-1 text-xs text-gray-600 md:flex-none md:overflow-visible">
           {chapters.map((chapter, i) => (
             <button
               key={chapter.id}
               onClick={() => setCurrentIdx(i)}
               aria-label={`跳转到第 ${chapter.chapter_number} 话`}
-              className={`w-2 h-2 rounded-full transition-colors ${
+              className={`h-2 w-2 shrink-0 rounded-full transition-colors ${
                 i === currentIdx ? 'bg-violet-500' : 'bg-gray-700 hover:bg-gray-600'
               }`}
             />
