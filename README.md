@@ -6,7 +6,7 @@ AI 小说创作 + 漫画插画生成工具。通过对话引导 AI 创作小说�
 
 - **AI 小说创作**：基于 DeepSeek API，通过对话交互引导创作。
 - **自动分镜**：AI 将小说内容拆分为漫画分镜脚本，支持手动编辑。
-- **漫画生成**：基于 Image2 API 生成漫画图片，支持逐张重新生成。
+- **漫画生成**：基于用户自配的 OpenAI 兼容中转站（gpt-image-2）生成漫画图片，支持逐张重新生成。
 - **角色卡系统**：固定角色外貌描述，帮助保持人物形象一致。
 - **多张垫图**：支持上传多张参考图，让生成结果更稳定。
 - **实时进度**：对话、分镜、漫画生成都有进度反馈。
@@ -15,7 +15,7 @@ AI 小说创作 + 漫画插画生成工具。通过对话引导 AI 创作小说�
 
 - **后端**：Python / FastAPI / SQLAlchemy / SQLite
 - **前端**：React / TypeScript / Vite / TailwindCSS
-- **AI**：DeepSeek API + Image2 API
+- **AI**：DeepSeek API + OpenAI 兼容图片中转（gpt-image-2）
 
 ## 使用教程（SQLite 版）
 
@@ -112,8 +112,6 @@ http://localhost:5173
 
 打开网页后，点击页面上的 **API Key** 按钮。
 
-你需要配置 DeepSeek Key，并在两个图片服务中选择一个：
-
 #### DeepSeek API Key
 
 用于 AI 对话、生成小说、生成分镜。
@@ -124,26 +122,14 @@ http://localhost:5173
 https://platform.deepseek.com/usage
 ```
 
-#### 图片生成服务
+#### 图片生成服务（自定义中转站）
 
-在 API Key 设置中选择图片服务：
+在 API Key 设置中配置你自己的 OpenAI 兼容图片中转站：
 
-- **省钱生图**：1 分一张，使用 `vidu-image-gpt2`，不支持垫图。选择后，已有垫图素材会保留，但生成请求会自动取消使用垫图。
-- **Image2**：5 分一张，支持单张和多张垫图，适合需要保持角色外貌一致性的场景。
+- **Base URL**：你的中转站地址（如 `https://example.com/v1`，填不填 `/v1` 都行，系统会自动补全）
+- **API Key**：中转站的 API Key
 
-省钱生图注册 / 充值：
-
-```text
-https://st.qinnaonao.com/sign-up?aff=iKGh
-```
-
-Image2 充值入口：
-
-```text
-https://api.duojie.games/console/token
-```
-
-购买后，在网页的 API Key 设置窗口选择服务、填入对应 Key，然后点击保存。
+系统使用 `gpt-image-2` 模型生图，支持单张和多张垫图（通过 `/v1/images/edits`）。你可以保存多个中转站配置，随时切换。
 
 ### 5. 开始测试
 
