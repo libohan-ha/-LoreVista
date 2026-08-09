@@ -91,9 +91,7 @@ function useApiKeyConfigured() {
     const s = getApiKeySettings();
     const activeImageKey = s.imageProvider === 'newapi'
       ? s.newapiApiKey
-      : s.imageProvider === 'ai98pro'
-        ? s.ai98proApiKey
-        : s.image2ApiKey;
+      : s.image2ApiKey;
     const llmConfigured = s.llmProvider === 'deepseek' ? !!s.deepseekApiKey : !!s.openaiApiKey;
     return { deepseek: llmConfigured, image: !!activeImageKey, provider: s.imageProvider };
   };
@@ -161,7 +159,6 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
   const [imageProvider, setImageProvider] = useState<ImageProvider>('image2');
   const [image2ApiKey, setImage2ApiKey] = useState('');
   const [newapiApiKey, setNewapiApiKey] = useState('');
-  const [ai98proApiKey, setAi98proApiKey] = useState('');
   const [llmProvider, setLlmProvider] = useState<LLMProvider>('deepseek');
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState('');
   const [openaiApiKey, setOpenaiApiKey] = useState('');
@@ -183,7 +180,6 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
     setImageProvider(settings.imageProvider);
     setImage2ApiKey(settings.image2ApiKey);
     setNewapiApiKey(settings.newapiApiKey);
-    setAi98proApiKey(settings.ai98proApiKey);
     setLlmProvider(settings.llmProvider);
     setOpenaiBaseUrl(settings.openaiBaseUrl);
     setOpenaiApiKey(settings.openaiApiKey);
@@ -262,7 +258,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
       nextProfiles = [profile, ...openaiProfiles.filter((item) => item.id !== activeProfileId)];
       saveOpenAIProfiles(nextProfiles, activeProfileId);
     }
-    saveApiKeySettings({ deepseekApiKey, imageProvider, image2ApiKey, newapiApiKey, ai98proApiKey, llmProvider, openaiBaseUrl, openaiApiKey, openaiModel });
+    saveApiKeySettings({ deepseekApiKey, imageProvider, image2ApiKey, newapiApiKey, llmProvider, openaiBaseUrl, openaiApiKey, openaiModel });
     onClose();
   };
 
@@ -273,7 +269,6 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
     setImageProvider('image2');
     setImage2ApiKey('');
     setNewapiApiKey('');
-    setAi98proApiKey('');
     setLlmProvider('deepseek');
     setOpenaiBaseUrl('');
     setOpenaiApiKey('');
@@ -294,7 +289,6 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
       imageProvider,
       image2ApiKey,
       newapiApiKey,
-      ai98proApiKey,
       llmProvider,
       openaiBaseUrl: nextActive?.baseUrl || '',
       openaiApiKey: nextActive?.apiKey || '',
@@ -304,7 +298,7 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
     selectOpenAIProfile(nextActive?.id || '');
   };
 
-  const hasAny = !!(deepseekApiKey || image2ApiKey || newapiApiKey || ai98proApiKey || (llmProvider === 'openai_compat' ? openaiApiKey : ''));
+  const hasAny = !!(deepseekApiKey || image2ApiKey || newapiApiKey || (llmProvider === 'openai_compat' ? openaiApiKey : ''));
 
   const openaiFields = llmProvider === 'openai_compat';
 
@@ -516,14 +510,6 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
                 <div className="text-sm font-medium text-gray-100">Image2</div>
                 <div className="mt-1 text-xs font-semibold text-amber-300">5 分一张 · 支持垫图</div>
               </button>
-              <button
-                type="button"
-                onClick={() => setImageProvider('ai98pro')}
-                className={`min-w-0 rounded-lg border p-3 text-left transition-colors ${imageProvider === 'ai98pro' ? 'border-sky-500 bg-sky-500/10' : 'border-gray-800 bg-gray-900 hover:border-gray-700'}`}
-              >
-                <div className="text-sm font-medium text-gray-100">AI98Pro</div>
-                <div className="mt-1 text-xs font-semibold text-sky-300">gpt-image-2 · 支持垫图</div>
-              </button>
             </div>
 
             {imageProvider === 'newapi' ? (
@@ -536,15 +522,6 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
                 </div>
                 <SecretInput value={newapiApiKey} onChange={setNewapiApiKey} placeholder="填入省钱生图 API Key" className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-emerald-500" />
                 <p className="text-xs leading-relaxed text-gray-500">使用 vidu-image-gpt2。选择该服务时，已上传的垫图会保留，但生成请求会自动取消使用垫图。</p>
-              </div>
-            ) : imageProvider === 'ai98pro' ? (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <label className="text-xs font-medium text-gray-300">AI98Pro API Key</label>
-                  <span className="text-xs text-sky-300">ai98pro.xyz</span>
-                </div>
-                <SecretInput value={ai98proApiKey} onChange={setAi98proApiKey} placeholder="Enter AI98Pro API Key" className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-sky-500" />
-                <p className="text-xs leading-relaxed text-gray-500">Uses gpt-image-2 via AI98Pro; uploaded reference images are sent through /v1/images/edits.</p>
               </div>
             ) : (
               <div className="space-y-2">
