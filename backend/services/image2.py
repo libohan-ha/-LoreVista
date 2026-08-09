@@ -21,12 +21,13 @@ load_dotenv()
 
 DEFAULT_IMAGE_API_BASE_URL = "https://api.duojie.games/v1"
 DEFAULT_NEWAPI_IMAGE_BASE_URL = "https://st.qinnaonao.com/v1"
-SUPPORTED_IMAGE_PROVIDERS = {"image2", "newapi"}
+SUPPORTED_IMAGE_PROVIDERS = {"custom"}
 
 
 def normalize_image_api_base_url(base_url: str | None, default: str = DEFAULT_IMAGE_API_BASE_URL) -> str:
     base = (base_url or default).strip().rstrip("/")
-    return re.sub(r"(?i)(/v1)+$", "/v1", base)
+    base = re.sub(r"(?i)(/v1)+$", "/v1", base)
+    return base if re.search(r"(?i)/v1$", base) else f"{base}/v1"
 
 
 def normalize_image_provider(provider: str | None) -> str:
@@ -37,6 +38,7 @@ def normalize_image_provider(provider: str | None) -> str:
 IMAGE_API_BASE_URL = normalize_image_api_base_url(os.getenv("IMAGE_API_BASE_URL"))
 IMAGE_API_KEY = os.getenv("IMAGE_API_KEY", "")
 IMAGE_MODEL = "gpt-image-2"
+CUSTOM_IMAGE_MODEL = "gpt-image-2"
 NEWAPI_IMAGE_BASE_URL = normalize_image_api_base_url(
     os.getenv("NEWAPI_IMAGE_BASE_URL"), DEFAULT_NEWAPI_IMAGE_BASE_URL
 )
@@ -284,6 +286,7 @@ async def generate_manga_image(
     color_mode: str = "bw",
     api_key: str | None = None,
     provider: str = "image2",
+    base_url_override: str | None = None,
 ) -> str:
     """Generate a single manga image and save it. Returns the relative file path.
 
@@ -291,9 +294,15 @@ async def generate_manga_image(
     as `image[]` multipart parts (verified to work with duojie API).
     """
     provider = normalize_image_provider(provider)
-    provider_name = "NewAPI" if provider == "newapi" else "Image2"
+    provider_name = {"newapi": "NewAPI", "custom": "Custom"}.get(provider, "Image2")
     base_url = NEWAPI_IMAGE_BASE_URL if provider == "newapi" else IMAGE_API_BASE_URL
     model = NEWAPI_IMAGE_MODEL if provider == "newapi" else IMAGE_MODEL
+    # Custom provider: require a user-supplied URL and always use gpt-image-2.
+    if provider == "custom":
+        if not base_url_override or not base_url_override.strip():
+            raise ValueError("自定义中转站必须填写 Base URL")
+        base_url = normalize_image_api_base_url(base_url_override)
+        model = CUSTOM_IMAGE_MODEL
     total_pages = len(all_scenes) if all_scenes else 1
     progress_label = f"{image_number}/{total_pages}"
     # NewAPI currently exposes generations only. Keep uploaded references on disk,
@@ -447,8 +456,10 @@ async def generate_manga_image(
                     if len(ref_blobs) == 1:
                         files = [("image", (ref_blobs[0][0], io.BytesIO(ref_blobs[0][1]), "image/png"))]
                     else:
+                        # OpenAI-compatible edits APIs accept repeated image fields.
+                        image_field = "image" if provider == "custom" else "image[]"
                         files = [
-                            ("image[]", (name, io.BytesIO(blob), "image/png"))
+                            (image_field, (name, io.BytesIO(blob), "image/png"))
                             for name, blob in ref_blobs
                         ]
                     resp = await client.post(
@@ -470,7 +481,7 @@ async def generate_manga_image(
                         "prompt": full_prompt,
                         "n": 1,
                     }
-                    if provider == "image2":
+                    if provider in {"image2", "custom"}:
                         payload.update({
                             "size": IMAGE_SIZE,
                             **_image_response_format_payload(),
@@ -562,7 +573,7 @@ async def generate_manga_image(
         except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ReadError, httpx.WriteError, httpx.ProtocolError) as e:
             if heartbeat_task:
                 heartbeat_task.cancel()
-            logger.error(f"[{progress_label}] {provider_name} response was lost after the request may have been processed; not retrying: {e}")
+            logger.error(f"[{progress_label}] {provider_name} response was lost after the request may have been processed; not retrying: {type(e).__name__}: {e!r}")
             raise ImageResponseLostError(_response_lost_message(e, provider_name)) from e
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as e:
             last_err = e

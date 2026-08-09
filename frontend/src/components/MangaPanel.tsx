@@ -37,9 +37,6 @@ import {
   type CharacterSource,
   type AssetGroup,
   type SceneRevisionEntry,
-  getApiKeySettings,
-  API_KEY_CHANGE_EVENT,
-  type ImageProvider,
 } from '../api';
 import { genStore } from '../genStore';
 
@@ -108,17 +105,6 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const mangaAbortRef = useRef<Map<number, AbortController>>(new Map());
   const activeChapterIdRef = useRef<number | null>(chapter?.id ?? null);
   activeChapterIdRef.current = chapter?.id ?? null;
-  const [imageProvider, setImageProvider] = useState<ImageProvider>(() => getApiKeySettings().imageProvider);
-
-  useEffect(() => {
-    const syncProvider = () => setImageProvider(getApiKeySettings().imageProvider);
-    window.addEventListener(API_KEY_CHANGE_EVENT, syncProvider);
-    window.addEventListener('storage', syncProvider);
-    return () => {
-      window.removeEventListener(API_KEY_CHANGE_EVENT, syncProvider);
-      window.removeEventListener('storage', syncProvider);
-    };
-  }, []);
 
   // Subscribe to module-level generation store so we re-render when any chapter's gen state changes
   const [, setStoreTick] = useState(0);
@@ -772,16 +758,12 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
               onClick={() => setRefModalOpen(true)}
               disabled={!chapter}
               className={`flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors
-                ${imageProvider === 'newapi'
-                  ? 'bg-gray-900 text-gray-500 border border-gray-800'
-                  : refImages.length > 0
+                ${refImages.length > 0
                     ? 'bg-emerald-900/50 hover:bg-emerald-800 text-emerald-300 border border-emerald-700'
                     : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
                 } disabled:opacity-40`}
               title={
-                imageProvider === 'newapi'
-                  ? '省钱生图不支持垫图；素材会保留，生成时自动取消使用'
-                  : refImages.length > 0
+                refImages.length > 0
                     ? refSource === 'story' || refSource === 'asset_group'
                       ? `全局垫图 ${refImages.length} 张· 点击查看/管理`
                       : `已设置 ${refImages.length} 张垫图· 点击查看/管理`
@@ -789,9 +771,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
               }
             >
               <ImagePlus size={13} />
-              {imageProvider === 'newapi'
-                ? refImages.length > 0 ? `垫图已取消 (${refImages.length})` : '不支持垫图'
-                : refImages.length > 0
+              {refImages.length > 0
                   ? refSource === 'story' || refSource === 'asset_group'
                     ? `全局垫图 ${refImages.length}`
                     : `已垫图 ${refImages.length}`
@@ -1499,10 +1479,8 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             </div>
             <div className="flex-1 overflow-y-auto p-5">
               <p className="text-xs text-gray-500 mb-4 leading-relaxed">
-                {imageProvider === 'newapi'
-                  ? '当前选择省钱生图（1 分一张），该服务不支持垫图。已上传素材不会删除，但生成和重新生成时会自动取消使用垫图。切换回 Image2 后可继续使用。'
-                  : '上传角色参考图，AI 生成漫画时会保持人物外貌一致性。'}
-                {imageProvider === 'image2' && (refSource === 'story' || refSource === 'asset_group') && refImages.length > 0 && (
+                {'上传角色参考图，AI 生成漫画时会保持人物外貌一致性。'}
+                {(refSource === 'story' || refSource === 'asset_group') && refImages.length > 0 && (
                   <> 当前显示首页设置的全局垫图；上传新图将创建本话专属垫图覆盖全局。</>
                 )}
               </p>
@@ -1569,14 +1547,12 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
               </span>
               <button
                 onClick={() => refFileRef.current?.click()}
-                disabled={imageProvider === 'newapi' || !chapter || refUploading || refImages.length >= refMax && refSource === 'chapter'}
+                disabled={!chapter || refUploading || refImages.length >= refMax && refSource === 'chapter'}
                 className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-md
                            bg-violet-600 hover:bg-violet-500 text-white
                            disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 title={
-                  imageProvider === 'newapi'
-                    ? '省钱生图不支持垫图，请切换到 Image2'
-                    : refImages.length >= refMax && refSource === 'chapter'
+                  refImages.length >= refMax && refSource === 'chapter'
                       ? `已达上限 ${refMax} 张`
                       : '上传一张垫图'
                 }

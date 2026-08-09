@@ -19,12 +19,13 @@ import {
   clearApiKeySettings,
   API_KEY_CHANGE_EVENT,
   DEEPSEEK_USAGE_URL,
-  IMAGE2_CONSOLE_URL,
-  NEWAPI_SIGNUP_URL,
-  type ImageProvider,
   type LLMProvider,
   type OpenAIProfile,
   listLlmModels,
+  type ImageProfile,
+  getImageProfiles,
+  getActiveImageProfileId,
+  saveImageProfiles,
 } from './api';
 
 type View = 'home' | 'editor';
@@ -89,9 +90,7 @@ function useIsMobile() {
 function useApiKeyConfigured() {
   const read = () => {
     const s = getApiKeySettings();
-    const activeImageKey = s.imageProvider === 'newapi'
-      ? s.newapiApiKey
-      : s.image2ApiKey;
+    const activeImageKey = s.customBaseUrl.trim() && s.customApiKey;
     const llmConfigured = s.llmProvider === 'deepseek' ? !!s.deepseekApiKey : !!s.openaiApiKey;
     return { deepseek: llmConfigured, image: !!activeImageKey, provider: s.imageProvider };
   };
@@ -156,9 +155,10 @@ function SecretInput({
 function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('llm');
   const [deepseekApiKey, setDeepseekApiKey] = useState('');
-  const [imageProvider, setImageProvider] = useState<ImageProvider>('image2');
-  const [image2ApiKey, setImage2ApiKey] = useState('');
-  const [newapiApiKey, setNewapiApiKey] = useState('');
+  const [customBaseUrl, setCustomBaseUrl] = useState('');
+  const [customApiKey, setCustomApiKey] = useState('');
+  const [imageProfiles, setImageProfiles] = useState<ImageProfile[]>([]);
+  const [activeImageProfileId, setActiveImageProfileId] = useState('');
   const [llmProvider, setLlmProvider] = useState<LLMProvider>('deepseek');
   const [openaiBaseUrl, setOpenaiBaseUrl] = useState('');
   const [openaiApiKey, setOpenaiApiKey] = useState('');
@@ -177,9 +177,10 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
     setFetchingModels(false);
     const settings = getApiKeySettings();
     setDeepseekApiKey(settings.deepseekApiKey);
-    setImageProvider(settings.imageProvider);
-    setImage2ApiKey(settings.image2ApiKey);
-    setNewapiApiKey(settings.newapiApiKey);
+    setCustomBaseUrl(settings.customBaseUrl);
+    setCustomApiKey(settings.customApiKey);
+    setImageProfiles(getImageProfiles());
+    setActiveImageProfileId(getActiveImageProfileId());
     setLlmProvider(settings.llmProvider);
     setOpenaiBaseUrl(settings.openaiBaseUrl);
     setOpenaiApiKey(settings.openaiApiKey);
@@ -242,6 +243,13 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
     setModelError('');
   };
 
+  const selectImageProfile = (profileId: string) => {
+    setActiveImageProfileId(profileId);
+    const profile = imageProfiles.find((item) => item.id === profileId);
+    setCustomBaseUrl(profile?.baseUrl || '');
+    setCustomApiKey(profile?.apiKey || '');
+  };
+
   if (!open) return null;
 
   const handleSave = () => {
@@ -258,7 +266,13 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
       nextProfiles = [profile, ...openaiProfiles.filter((item) => item.id !== activeProfileId)];
       saveOpenAIProfiles(nextProfiles, activeProfileId);
     }
-    saveApiKeySettings({ deepseekApiKey, imageProvider, image2ApiKey, newapiApiKey, llmProvider, openaiBaseUrl, openaiApiKey, openaiModel });
+    if (customBaseUrl.trim() && customApiKey.trim()) {
+      const imgProfileId = activeImageProfileId || `image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const imgProfile: ImageProfile = { id: imgProfileId, baseUrl: customBaseUrl.trim(), apiKey: customApiKey.trim() };
+      const nextImageProfiles = [imgProfile, ...imageProfiles.filter((item) => item.id !== imgProfileId)];
+      saveImageProfiles(nextImageProfiles, imgProfileId);
+    }
+    saveApiKeySettings({ deepseekApiKey, imageProvider: 'custom', customBaseUrl, customApiKey, llmProvider, openaiBaseUrl, openaiApiKey, openaiModel });
     onClose();
   };
 
@@ -266,9 +280,10 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
     if (!window.confirm('确定要清除已保存的 API Key 吗？')) return;
     clearApiKeySettings();
     setDeepseekApiKey('');
-    setImageProvider('image2');
-    setImage2ApiKey('');
-    setNewapiApiKey('');
+    setCustomBaseUrl('');
+    setCustomApiKey('');
+    setImageProfiles([]);
+    setActiveImageProfileId('');
     setLlmProvider('deepseek');
     setOpenaiBaseUrl('');
     setOpenaiApiKey('');
@@ -286,9 +301,9 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
     saveOpenAIProfiles(nextProfiles, nextActive?.id || '');
     saveApiKeySettings({
       deepseekApiKey,
-      imageProvider,
-      image2ApiKey,
-      newapiApiKey,
+      imageProvider: 'custom',
+      customBaseUrl,
+      customApiKey,
       llmProvider,
       openaiBaseUrl: nextActive?.baseUrl || '',
       openaiApiKey: nextActive?.apiKey || '',
@@ -298,7 +313,26 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
     selectOpenAIProfile(nextActive?.id || '');
   };
 
-  const hasAny = !!(deepseekApiKey || image2ApiKey || newapiApiKey || (llmProvider === 'openai_compat' ? openaiApiKey : ''));
+  const handleDeleteImageProfile = () => {
+    if (!activeImageProfileId) return;
+    const nextProfiles = imageProfiles.filter((profile) => profile.id !== activeImageProfileId);
+    const nextActive = nextProfiles[0];
+    saveImageProfiles(nextProfiles, nextActive?.id || '');
+    saveApiKeySettings({
+      deepseekApiKey,
+      imageProvider: 'custom',
+      customBaseUrl: nextActive?.baseUrl || '',
+      customApiKey: nextActive?.apiKey || '',
+      llmProvider,
+      openaiBaseUrl,
+      openaiApiKey,
+      openaiModel,
+    });
+    setImageProfiles(nextProfiles);
+    selectImageProfile(nextActive?.id || '');
+  };
+
+  const hasAny = !!(deepseekApiKey || customApiKey || (llmProvider === 'openai_compat' ? openaiApiKey : ''));
 
   const openaiFields = llmProvider === 'openai_compat';
 
@@ -493,48 +527,27 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
           {settingsTab === 'image' && (
           <div className="space-y-3">
             <label className="text-xs font-medium text-gray-300">图片生成服务</label>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => setImageProvider('newapi')}
-                className={`min-w-0 rounded-lg border p-3 text-left transition-colors ${imageProvider === 'newapi' ? 'border-emerald-500 bg-emerald-500/10' : 'border-gray-800 bg-gray-900 hover:border-gray-700'}`}
-              >
-                <div className="text-sm font-medium text-gray-100">省钱生图</div>
-                <div className="mt-1 text-xs font-semibold text-emerald-300">1 分一张 · 不支持垫图</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => setImageProvider('image2')}
-                className={`min-w-0 rounded-lg border p-3 text-left transition-colors ${imageProvider === 'image2' ? 'border-amber-500 bg-amber-500/10' : 'border-gray-800 bg-gray-900 hover:border-gray-700'}`}
-              >
-                <div className="text-sm font-medium text-gray-100">Image2</div>
-                <div className="mt-1 text-xs font-semibold text-amber-300">5 分一张 · 支持垫图</div>
-              </button>
+            <div className="rounded-lg border border-indigo-500/40 bg-indigo-500/5 p-3 text-sm font-medium text-gray-100">自定义中转站</div>
+            <div className="space-y-3 rounded-lg border border-gray-800 bg-gray-900/60 p-3">
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-gray-300">已保存的中转配置</label>
+                <div className="flex items-center gap-2">
+                  <select value={activeImageProfileId} onChange={(e) => selectImageProfile(e.target.value)} className="min-w-0 flex-1 rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100 outline-none focus:border-indigo-500">
+                    <option value="">新建中转配置</option>
+                    {imageProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.baseUrl}</option>)}
+                  </select>
+                  <button type="button" onClick={handleDeleteImageProfile} disabled={!activeImageProfileId} className="shrink-0 rounded-lg border border-gray-700 p-2 text-gray-400 hover:border-rose-700 hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-40" title="删除当前中转配置" aria-label="删除当前中转配置"><Trash2 size={15} /></button>
+                </div>
+                <p className="text-[11px] text-gray-500">点击底部“保存”会记录当前 Base URL 和 Key，下次可直接切换。</p>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3"><label className="text-xs font-medium text-gray-300">中转站 Base URL</label><span className="text-xs text-indigo-300">OpenAI 兼容</span></div>
+                <input type="url" value={customBaseUrl} onChange={(e) => setCustomBaseUrl(e.target.value)} placeholder="https://your-gateway.com/v1" className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-indigo-500" />
+                <label className="text-xs font-medium text-gray-300">API Key</label>
+                <SecretInput value={customApiKey} onChange={setCustomApiKey} placeholder="填入中转站 API Key" className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-indigo-500" />
+                <p className="text-xs leading-relaxed text-gray-500">使用 gpt-image-2，支持单张和多张垫图。Base URL 可填写 https://example.com 或 https://example.com/v1。</p>
+              </div>
             </div>
-
-            {imageProvider === 'newapi' ? (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <label className="text-xs font-medium text-gray-300">省钱生图 API Key</label>
-                  <a href={NEWAPI_SIGNUP_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-emerald-300 hover:text-emerald-200">
-                    注册 / 充值 <ExternalLink size={12} />
-                  </a>
-                </div>
-                <SecretInput value={newapiApiKey} onChange={setNewapiApiKey} placeholder="填入省钱生图 API Key" className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-emerald-500" />
-                <p className="text-xs leading-relaxed text-gray-500">使用 vidu-image-gpt2。选择该服务时，已上传的垫图会保留，但生成请求会自动取消使用垫图。</p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <label className="text-xs font-medium text-gray-300">Image2 API Key</label>
-                  <a href={IMAGE2_CONSOLE_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-amber-300 hover:text-amber-200">
-                    充值链接 <ExternalLink size={12} />
-                  </a>
-                </div>
-                <SecretInput value={image2ApiKey} onChange={setImage2ApiKey} placeholder="填入 Image2 API Key" className="w-full rounded-lg border border-gray-800 bg-gray-900 px-3 py-2 text-sm text-gray-100 outline-none focus:border-amber-500" />
-                <p className="text-xs text-gray-500">支持单张和多张垫图，用于保持角色外貌一致性。</p>
-              </div>
-            )}
           </div>
           )}
         </div>
@@ -562,14 +575,14 @@ function ApiKeySettingsModal({ open, onClose }: { open: boolean; onClose: () => 
 }
 
 function ApiKeyButton({ onClick, compact = false }: { onClick: () => void; compact?: boolean }) {
-  const { deepseek, image, provider } = useApiKeyConfigured();
+  const { deepseek, image } = useApiKeyConfigured();
   const llmSettings = getApiKeySettings();
   const llmLabel = llmSettings.llmProvider === 'openai_compat' ? 'OpenAI中转' : 'DeepSeek';
   const status: 'ok' | 'partial' | 'none' =
     deepseek && image ? 'ok' : deepseek || image ? 'partial' : 'none';
   const dotColor =
     status === 'ok' ? 'bg-emerald-400' : status === 'partial' ? 'bg-amber-400' : 'bg-rose-500';
-  const providerName = provider === 'newapi' ? '省钱生图' : 'Image2';
+  const providerName = '图片中转';
   const tipText =
     status === 'ok'
       ? `已配置 ${llmLabel} + ${providerName} API Key`

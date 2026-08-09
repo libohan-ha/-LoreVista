@@ -237,9 +237,13 @@ def _user_image_api_key(request: Request) -> str | None:
     return request.headers.get("x-image-api-key") or None
 
 
+def _user_image_base_url(request: Request) -> str | None:
+    return request.headers.get("x-image-base-url") or None
+
+
 def _user_image_provider(request: Request) -> str:
     provider = (request.headers.get("x-image-provider") or "image2").strip().lower()
-    return provider if provider in {"image2", "newapi"} else "image2"
+    return provider if provider in {"custom"} else "image2"
 
 
 def _character_profile_text(body: dict) -> str:
@@ -1999,6 +2003,7 @@ async def _run_manga_generation_job(
     scenes: list[str],
     api_key: str | None,
     image_provider: str,
+    image_base_url: str | None,
 ):
     db = SessionLocal()
     try:
@@ -2046,6 +2051,7 @@ async def _run_manga_generation_job(
                         color_mode=_load_color_mode(chapter_id, db),
                         api_key=api_key,
                         provider=image_provider,
+                        base_url_override=image_base_url,
                     )
                 )
                 job.current_image_task = image_task
@@ -2164,6 +2170,7 @@ async def generate_manga_stream(chapter_id: int, request: Request, db: Session =
                     scenes,
                     _user_image_api_key(request),
                     _user_image_provider(request),
+                    _user_image_base_url(request),
                 )
             )
 
@@ -2258,6 +2265,7 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
         color_mode=_load_color_mode(chapter_id, db),
         api_key=_user_image_api_key(request),
         provider=image_provider,
+        base_url_override=_user_image_base_url(request),
     )
 
     if old_img:

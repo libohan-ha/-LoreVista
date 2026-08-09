@@ -1,10 +1,14 @@
 const BASE = '';
 const API_TOKEN = import.meta.env.VITE_API_TOKEN as string | undefined;
 export const DEEPSEEK_USAGE_URL = 'https://platform.deepseek.com/usage';
-export const IMAGE2_CONSOLE_URL = 'https://api.duojie.games/sign-up?aff=EYRW';
-export const NEWAPI_SIGNUP_URL = 'https://st.qinnaonao.com/sign-up?aff=iKGh';
-export type ImageProvider = 'image2' | 'newapi';
+export type ImageProvider = 'image2' | 'newapi' | 'custom';
 export type LLMProvider = 'deepseek' | 'openai_compat';
+
+export interface ImageProfile {
+  id: string;
+  baseUrl: string;
+  apiKey: string;
+}
 
 export interface OpenAIProfile {
   id: string;
@@ -16,8 +20,8 @@ export interface OpenAIProfile {
 export interface ApiKeySettings {
   deepseekApiKey: string;
   imageProvider: ImageProvider;
-  image2ApiKey: string;
-  newapiApiKey: string;
+  customBaseUrl: string;
+  customApiKey: string;
   llmProvider: LLMProvider;
   openaiBaseUrl: string;
   openaiApiKey: string;
@@ -26,10 +30,10 @@ export interface ApiKeySettings {
 
 // Stored in localStorage so multiple tabs share the same API key settings.
 const LS_DEEPSEEK_API_KEY = 'lorevista.deepseekApiKey';
-const LS_LEGACY_IMAGE_API_KEY = 'lorevista.imageApiKey';
-const LS_IMAGE_PROVIDER = 'lorevista.imageProvider';
-const LS_IMAGE2_API_KEY = 'lorevista.image2ApiKey';
-const LS_NEWAPI_API_KEY = 'lorevista.newapiApiKey';
+const LS_CUSTOM_BASE_URL = 'lorevista.customBaseUrl';
+const LS_IMAGE_PROFILES = 'lorevista.imageProfiles';
+const LS_IMAGE_ACTIVE_PROFILE = 'lorevista.imageActiveProfile';
+const LS_CUSTOM_API_KEY = 'lorevista.customApiKey';
 const LS_LLM_PROVIDER = 'lorevista.llmProvider';
 const LS_OPENAI_BASE_URL = 'lorevista.openaiBaseUrl';
 const LS_OPENAI_API_KEY = 'lorevista.openaiApiKey';
@@ -39,13 +43,11 @@ const LS_OPENAI_ACTIVE_PROFILE = 'lorevista.openaiActiveProfile';
 export const API_KEY_CHANGE_EVENT = 'lorevista:api-key-change';
 
 export function getApiKeySettings(): ApiKeySettings {
-  const imageProvider = localStorage.getItem(LS_IMAGE_PROVIDER) === 'newapi' ? 'newapi' : 'image2';
-  const legacyImageKey = localStorage.getItem(LS_LEGACY_IMAGE_API_KEY) || '';
   return {
+    imageProvider: 'custom',
+    customBaseUrl: localStorage.getItem(LS_CUSTOM_BASE_URL) || '',
+    customApiKey: localStorage.getItem(LS_CUSTOM_API_KEY) || '',
     deepseekApiKey: localStorage.getItem(LS_DEEPSEEK_API_KEY) || '',
-    imageProvider,
-    image2ApiKey: localStorage.getItem(LS_IMAGE2_API_KEY) || legacyImageKey,
-    newapiApiKey: localStorage.getItem(LS_NEWAPI_API_KEY) || '',
     llmProvider: (localStorage.getItem(LS_LLM_PROVIDER) as LLMProvider | null) || 'deepseek',
     openaiBaseUrl: localStorage.getItem(LS_OPENAI_BASE_URL) || '',
     openaiApiKey: localStorage.getItem(LS_OPENAI_API_KEY) || '',
@@ -55,15 +57,14 @@ export function getApiKeySettings(): ApiKeySettings {
 
 export function saveApiKeySettings(settings: ApiKeySettings): void {
   const deepseek = settings.deepseekApiKey.trim();
-  const image2 = settings.image2ApiKey.trim();
-  const newapi = settings.newapiApiKey.trim();
+  const customUrl = settings.customBaseUrl.trim();
+  const customKey = settings.customApiKey.trim();
   if (deepseek) localStorage.setItem(LS_DEEPSEEK_API_KEY, deepseek);
   else localStorage.removeItem(LS_DEEPSEEK_API_KEY);
-  localStorage.setItem(LS_IMAGE_PROVIDER, settings.imageProvider);
-  if (image2) localStorage.setItem(LS_IMAGE2_API_KEY, image2);
-  else localStorage.removeItem(LS_IMAGE2_API_KEY);
-  if (newapi) localStorage.setItem(LS_NEWAPI_API_KEY, newapi);
-  else localStorage.removeItem(LS_NEWAPI_API_KEY);
+  if (customUrl) localStorage.setItem(LS_CUSTOM_BASE_URL, customUrl);
+  else localStorage.removeItem(LS_CUSTOM_BASE_URL);
+  if (customKey) localStorage.setItem(LS_CUSTOM_API_KEY, customKey);
+  else localStorage.removeItem(LS_CUSTOM_API_KEY);
   localStorage.setItem(LS_LLM_PROVIDER, settings.llmProvider);
   if (settings.openaiBaseUrl.trim()) localStorage.setItem(LS_OPENAI_BASE_URL, settings.openaiBaseUrl.trim());
   else localStorage.removeItem(LS_OPENAI_BASE_URL);
@@ -71,7 +72,6 @@ export function saveApiKeySettings(settings: ApiKeySettings): void {
   else localStorage.removeItem(LS_OPENAI_API_KEY);
   if (settings.openaiModel.trim()) localStorage.setItem(LS_OPENAI_MODEL, settings.openaiModel.trim());
   else localStorage.removeItem(LS_OPENAI_MODEL);
-  localStorage.removeItem(LS_LEGACY_IMAGE_API_KEY);
   // Notify same-tab listeners. Other tabs receive the browser 'storage' event.
   try {
     window.dispatchEvent(new Event(API_KEY_CHANGE_EVENT));
@@ -131,23 +131,66 @@ export function saveOpenAIProfiles(profiles: OpenAIProfile[], activeProfileId: s
   }
 }
 
+export function getImageProfiles(): ImageProfile[] {
+  const raw = localStorage.getItem(LS_IMAGE_PROFILES);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((item): item is ImageProfile => (
+          item && typeof item.id === 'string' && typeof item.baseUrl === 'string' &&
+          typeof item.apiKey === 'string' &&
+          item.baseUrl.trim() && item.apiKey.trim()
+        ));
+      }
+    } catch {
+      // Ignore malformed data
+    }
+  }
+  const legacy = getApiKeySettings();
+  if (legacy.customBaseUrl.trim() && legacy.customApiKey.trim()) {
+    return [{ id: 'legacy-image-profile', baseUrl: legacy.customBaseUrl, apiKey: legacy.customApiKey }];
+  }
+  return [];
+}
+
+export function getActiveImageProfileId(): string {
+  return localStorage.getItem(LS_IMAGE_ACTIVE_PROFILE) || '';
+}
+
+export function saveImageProfiles(profiles: ImageProfile[], activeProfileId: string): void {
+  const cleanProfiles = profiles
+    .filter((profile) => profile.baseUrl.trim() && profile.apiKey.trim())
+    .map((profile) => ({ ...profile, baseUrl: profile.baseUrl.trim(), apiKey: profile.apiKey.trim() }));
+  if (cleanProfiles.length) localStorage.setItem(LS_IMAGE_PROFILES, JSON.stringify(cleanProfiles));
+  else localStorage.removeItem(LS_IMAGE_PROFILES);
+  if (activeProfileId && cleanProfiles.some((profile) => profile.id === activeProfileId)) {
+    localStorage.setItem(LS_IMAGE_ACTIVE_PROFILE, activeProfileId);
+  } else {
+    localStorage.removeItem(LS_IMAGE_ACTIVE_PROFILE);
+  }
+}
+
 export function clearApiKeySettings(): void {
-  saveApiKeySettings({ deepseekApiKey: '', imageProvider: 'image2', image2ApiKey: '', newapiApiKey: '', llmProvider: 'deepseek', openaiBaseUrl: '', openaiApiKey: '', openaiModel: '' });
+  saveApiKeySettings({ deepseekApiKey: '', imageProvider: 'custom', customBaseUrl: '', customApiKey: '', llmProvider: 'deepseek', openaiBaseUrl: '', openaiApiKey: '', openaiModel: '' });
   localStorage.removeItem(LS_OPENAI_PROFILES);
   localStorage.removeItem(LS_OPENAI_ACTIVE_PROFILE);
+  localStorage.removeItem(LS_IMAGE_PROFILES);
+  localStorage.removeItem(LS_IMAGE_ACTIVE_PROFILE);
 }
 
 type LlmHeaderOverrides = Pick<ApiKeySettings, 'llmProvider' | 'openaiBaseUrl' | 'openaiApiKey' | 'openaiModel'>;
 
 function apiHeaders(json = false, overrides?: Partial<LlmHeaderOverrides>): HeadersInit {
   const keys = { ...getApiKeySettings(), ...overrides };
-  const imageApiKey = keys.imageProvider === 'newapi' ? keys.newapiApiKey : keys.image2ApiKey;
+  const imageApiKey = keys.customApiKey;
   return {
     ...(json ? { 'Content-Type': 'application/json' } : {}),
     ...(API_TOKEN ? { 'X-API-Token': API_TOKEN } : {}),
     ...(keys.llmProvider === 'deepseek' && keys.deepseekApiKey ? { 'X-DeepSeek-API-Key': keys.deepseekApiKey } : {}),
     'X-Image-Provider': keys.imageProvider,
     ...(imageApiKey ? { 'X-Image-API-Key': imageApiKey } : {}),
+    ...(keys.imageProvider === 'custom' && keys.customBaseUrl.trim() ? { 'X-Image-Base-URL': keys.customBaseUrl.trim() } : {}),
     'X-LLM-Provider': keys.llmProvider,
     ...(keys.llmProvider === 'openai_compat'
       ? {
